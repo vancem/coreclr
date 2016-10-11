@@ -650,7 +650,7 @@ void Lowering::TreeNodeInfoInit(GenTree* tree)
 
 #ifdef FEATURE_PUT_STRUCT_ARG_STK
         case GT_PUTARG_STK:
-            TreeNodeInfoInitPutArgStk(tree);
+            TreeNodeInfoInitPutArgStk(tree->AsPutArgStk());
             break;
 #endif // FEATURE_PUT_STRUCT_ARG_STK
 
@@ -909,23 +909,11 @@ void Lowering::TreeNodeInfoInit(GenTree* tree)
     // Exclude RBM_NON_BYTE_REGS from dst candidates of tree node and src candidates of operands
     // if the tree node is a byte type.
     //
-    // Example1: GT_STOREIND(byte, addr, op2) - storeind of byte sized value from op2 into mem 'addr'
-    // Storeind itself will not produce any value and hence dstCount=0. But op2 could be TYP_INT
-    // value. In this case we need to exclude esi/edi from the src candidates of op2.
-    //
-    // Example2: GT_CAST(int <- bool <- int) - here type of GT_CAST node is int and castToType is bool.
-    //
-    // Example3: GT_EQ(int, op1 of type ubyte, op2 of type ubyte) - in this case codegen uses
-    // ubyte as the result of comparison and if the result needs to be materialized into a reg
-    // simply zero extend it to TYP_INT size.  Here is an example of generated code:
-    //         cmp dl, byte ptr[addr mode]
-    //         movzx edx, dl
-    //
     // Though this looks conservative in theory, in practice we could not think of a case where
     // the below logic leads to conservative register specification.  In future when or if we find
     // one such case, this logic needs to be fine tuned for that case(s).
-    if (varTypeIsByte(tree) || ((tree->OperGet() == GT_CAST) && varTypeIsByte(tree->CastToType())) ||
-        (tree->OperIsCompare() && varTypeIsByte(tree->gtGetOp1()) && varTypeIsByte(tree->gtGetOp2())))
+
+    if (ExcludeNonByteableRegisters(tree))
     {
         regMaskTP regMask;
         if (info->dstCount > 0)
@@ -1986,63 +1974,153 @@ void Lowering::TreeNodeInfoInitBlockStore(GenTreeBlk* blkNode)
 // Return Value:
 //    None.
 //
-void Lowering::TreeNodeInfoInitPutArgStk(GenTree* tree)
+void Lowering::TreeNodeInfoInitPutArgStk(GenTreePutArgStk* putArgStk)
 {
-    TreeNodeInfo* info = &(tree->gtLsraInfo);
+    TreeNodeInfo* info = &(putArgStk->gtLsraInfo);
     LinearScan*   l    = m_lsra;
 
 #ifdef _TARGET_X86_
-    if (tree->gtOp.gtOp1->gtOper == GT_FIELD_LIST)
+    if (putArgStk->gtOp1->gtOper == GT_FIELD_LIST)
     {
-        GenTreeFieldList* fieldListPtr = tree->gtOp.gtOp1->AsFieldList();
-        for (; fieldListPtr; fieldListPtr = fieldListPtr->Rest())
+        putArgStk->gtNumberReferenceSlots = 0;
+        putArgStk->gtPutArgStkKind        = GenTreePutArgStk::Kind::Invalid;
+
+        GenTreeFieldList* fieldList = putArgStk->gtOp1->AsFieldList();
+
+        // The code generator will push these fields in reverse order by offset. Reorder the list here s.t. the order
+        // of uses is visible to LSRA.
+        unsigned          fieldCount = 0;
+        GenTreeFieldList* head       = nullptr;
+        for (GenTreeFieldList *current = fieldList, *next; current != nullptr; current = next)
         {
-            GenTree* fieldNode = fieldListPtr->Current();
-            assert(fieldNode->TypeGet() != TYP_LONG);
-            if (varTypeIsByte(fieldNode))
+            next = current->Rest();
+
+            // First, insert the field node into the sorted list.
+            GenTreeFieldList* prev = nullptr;
+            for (GenTreeFieldList* cursor = head;; cursor = cursor->Rest())
             {
-                fieldNode->gtLsraInfo.setSrcCandidates(l, l->allRegs(TYP_INT) & ~RBM_NON_BYTE_REGS);
+                // If the offset of the current list node is greater than the offset of the cursor or if we have
+                // reached the end of the list, insert the current node before the cursor and terminate.
+                if ((cursor == nullptr) || (current->gtFieldOffset > cursor->gtFieldOffset))
+                {
+                    if (prev == nullptr)
+                    {
+                        assert(cursor == head);
+                        head = current;
+                    }
+                    else
+                    {
+                        prev->Rest() = current;
+                    }
+
+                    current->Rest() = cursor;
+                    break;
+                }
             }
-            info->srcCount++;
+
+            fieldCount++;
         }
+
+        info->srcCount = fieldCount;
         info->dstCount = 0;
+
+        // In theory, the upper bound for the size of a field list is 8: these constructs only appear when passing the
+        // collection of lclVars that represent the fields of a promoted struct lclVar, and we do not promote struct
+        // lclVars with more than 4 fields. If each of these lclVars is of type long, decomposition will split the
+        // corresponding field list nodes in two, giving an upper bound of 8.
+        //
+        // The reason that this is important is that the algorithm we use above to sort the field list is O(N^2): if
+        // the maximum size of a field list grows significantly, we will need to reevaluate it.
+        assert(fieldCount <= 8);
+
+        // The sort above may have changed which node is at the head of the list. Update the PUTARG_STK node if
+        // necessary.
+        if (head != fieldList)
+        {
+            head->gtFlags |= GTF_FIELD_LIST_HEAD;
+            fieldList->gtFlags &= ~GTF_FIELD_LIST_HEAD;
+
+#ifdef DEBUG
+            head->gtSeqNum = fieldList->gtSeqNum;
+#endif // DEBUG
+
+            head->gtLsraInfo = fieldList->gtLsraInfo;
+            head->gtClearReg(comp);
+
+            BlockRange().InsertAfter(fieldList, head);
+            BlockRange().Remove(fieldList);
+
+            fieldList        = head;
+            putArgStk->gtOp1 = fieldList;
+        }
+
+        // Now that the fields have been sorted, initialize the LSRA info.
+        bool     allFieldsAreSlots = true;
+        unsigned prevOffset        = putArgStk->getArgSize();
+        for (GenTreeFieldList* current = fieldList; current != nullptr; current = current->Rest())
+        {
+            GenTree* const  fieldNode   = current->Current();
+            const var_types fieldType   = fieldNode->TypeGet();
+            const unsigned  fieldOffset = current->gtFieldOffset;
+            assert(fieldType != TYP_LONG);
+
+            // TODO-X86-CQ: we could probably improve codegen here by marking all of the operands to field nodes that
+            // we are going to `push` on the stack as reg-optional.
+
+            const bool fieldIsSlot =
+                varTypeIsIntegralOrI(fieldType) && ((fieldOffset % 4) == 0) && ((prevOffset - fieldOffset) >= 4);
+            if (!fieldIsSlot)
+            {
+                allFieldsAreSlots = false;
+                if (varTypeIsByte(fieldType))
+                {
+                    // If this field is a slot--i.e. it is an integer field that is 4-byte aligned and takes up 4 bytes
+                    // (including padding)--we can store the whole value rather than just the byte. Otherwise, we will
+                    // need a byte-addressable register for the store.
+                    fieldNode->gtLsraInfo.setSrcCandidates(l, l->allRegs(TYP_INT) & ~RBM_NON_BYTE_REGS);
+                }
+            }
+
+            if (varTypeIsGC(fieldType))
+            {
+                putArgStk->gtNumberReferenceSlots++;
+            }
+
+            prevOffset = fieldOffset;
+        }
+
+        // If all fields of this list are slots, set the copy kind.
+        if (allFieldsAreSlots)
+        {
+            putArgStk->gtPutArgStkKind = GenTreePutArgStk::Kind::AllSlots;
+        }
         return;
     }
 #endif // _TARGET_X86_
 
-    if (tree->TypeGet() != TYP_STRUCT)
+    if (putArgStk->TypeGet() != TYP_STRUCT)
     {
-        TreeNodeInfoInitSimple(tree);
+        TreeNodeInfoInitSimple(putArgStk);
         return;
     }
 
-    GenTreePutArgStk* putArgStkTree = tree->AsPutArgStk();
-
-    GenTreePtr dst     = tree;
-    GenTreePtr src     = tree->gtOp.gtOp1;
+    GenTreePtr dst     = putArgStk;
+    GenTreePtr src     = putArgStk->gtOp1;
     GenTreePtr srcAddr = nullptr;
 
+    bool haveLocalAddr = false;
     if ((src->OperGet() == GT_OBJ) || (src->OperGet() == GT_IND))
     {
         srcAddr = src->gtOp.gtOp1;
+        assert(srcAddr != nullptr);
+        haveLocalAddr = srcAddr->OperIsLocalAddr();
     }
     else
     {
-        assert(varTypeIsSIMD(tree));
+        assert(varTypeIsSIMD(putArgStk));
     }
+
     info->srcCount = src->gtLsraInfo.dstCount;
-
-    // If this is a stack variable address,
-    // make the op1 contained, so this way
-    // there is no unnecessary copying between registers.
-    // To avoid assertion, increment the parent's source.
-    // It is recovered below.
-    bool haveLocalAddr = ((srcAddr != nullptr) && (srcAddr->OperIsLocalAddr()));
-    if (haveLocalAddr)
-    {
-        info->srcCount += 1;
-    }
-
     info->dstCount = 0;
 
     // In case of a CpBlk we could use a helper call. In case of putarg_stk we
@@ -2054,7 +2132,7 @@ void Lowering::TreeNodeInfoInitPutArgStk(GenTree* tree)
     // This threshold will decide from using the helper or let the JIT decide to inline
     // a code sequence of its choice.
     ssize_t helperThreshold = max(CPBLK_MOVS_LIMIT, CPBLK_UNROLL_LIMIT);
-    ssize_t size            = putArgStkTree->gtNumSlots * TARGET_POINTER_SIZE;
+    ssize_t size            = putArgStk->gtNumSlots * TARGET_POINTER_SIZE;
 
     // TODO-X86-CQ: The helper call either is not supported on x86 or required more work
     // (I don't know which).
@@ -2062,7 +2140,7 @@ void Lowering::TreeNodeInfoInitPutArgStk(GenTree* tree)
     // If we have a buffer between XMM_REGSIZE_BYTES and CPBLK_UNROLL_LIMIT bytes, we'll use SSE2.
     // Structs and buffer with sizes <= CPBLK_UNROLL_LIMIT bytes are occurring in more than 95% of
     // our framework assemblies, so this is the main code generation scheme we'll use.
-    if (size <= CPBLK_UNROLL_LIMIT && putArgStkTree->gtNumberReferenceSlots == 0)
+    if (size <= CPBLK_UNROLL_LIMIT && putArgStk->gtNumberReferenceSlots == 0)
     {
         // If we have a remainder smaller than XMM_REGSIZE_BYTES, we need an integer temp reg.
         //
@@ -2096,34 +2174,38 @@ void Lowering::TreeNodeInfoInitPutArgStk(GenTree* tree)
             info->addInternalCandidates(l, l->internalFloatRegCandidates());
         }
 
-        if (haveLocalAddr)
-        {
-            MakeSrcContained(putArgStkTree, srcAddr);
-        }
-
         // If src or dst are on stack, we don't have to generate the address into a register
         // because it's just some constant+SP
-        putArgStkTree->gtPutArgStkKind = GenTreePutArgStk::PutArgStkKindUnroll;
+        putArgStk->gtPutArgStkKind = GenTreePutArgStk::Kind::Unroll;
     }
+#ifdef _TARGET_X86_
+    else if (putArgStk->gtNumberReferenceSlots != 0)
+    {
+        // On x86, we must use `push` to store GC references to the stack in order for the emitter to properly update
+        // the function's GC info. These `putargstk` nodes will generate a sequence of `push` instructions.
+    }
+#endif // _TARGET_X86_
     else
     {
         info->internalIntCount += 3;
         info->setInternalCandidates(l, (RBM_RDI | RBM_RCX | RBM_RSI));
-        if (haveLocalAddr)
-        {
-            MakeSrcContained(putArgStkTree, srcAddr);
-        }
 
-        putArgStkTree->gtPutArgStkKind = GenTreePutArgStk::PutArgStkKindRepInstr;
+        putArgStk->gtPutArgStkKind = GenTreePutArgStk::Kind::RepInstr;
     }
 
     // Always mark the OBJ and ADDR as contained trees by the putarg_stk. The codegen will deal with this tree.
-    MakeSrcContained(putArgStkTree, src);
+    MakeSrcContained(putArgStk, src);
 
-    // Balance up the inc above.
     if (haveLocalAddr)
     {
-        info->srcCount -= 1;
+        // If the source address is the address of a lclVar, make the source address contained to avoid unnecessary
+        // copies.
+        //
+        // To avoid an assertion in MakeSrcContained, increment the parent's source count beforehand and decrement it
+        // afterwards.
+        info->srcCount++;
+        MakeSrcContained(putArgStk, srcAddr);
+        info->srcCount--;
     }
 }
 #endif // FEATURE_PUT_STRUCT_ARG_STK
@@ -4450,6 +4532,71 @@ GenTree* Lowering::PreferredRegOptionalOperand(GenTree* tree)
 
     return preferredOp;
 }
+
+#ifdef _TARGET_X86_
+//------------------------------------------------------------------------
+// ExcludeNonByteableRegisters: Determines if we need to exclude non-byteable registers for
+// various reasons
+//
+// Arguments:
+//    tree      - The node of interest
+//
+// Return Value:
+//    If we need to exclude non-byteable registers
+//
+bool Lowering::ExcludeNonByteableRegisters(GenTree* tree)
+{
+    // Example1: GT_STOREIND(byte, addr, op2) - storeind of byte sized value from op2 into mem 'addr'
+    // Storeind itself will not produce any value and hence dstCount=0. But op2 could be TYP_INT
+    // value. In this case we need to exclude esi/edi from the src candidates of op2.
+    if (varTypeIsByte(tree))
+    {
+        return true;
+    }
+    // Example2: GT_CAST(int <- bool <- int) - here type of GT_CAST node is int and castToType is bool.
+    else if ((tree->OperGet() == GT_CAST) && varTypeIsByte(tree->CastToType()))
+    {
+        return true;
+    }
+    else if (tree->OperIsCompare())
+    {
+        GenTree* op1 = tree->gtGetOp1();
+        GenTree* op2 = tree->gtGetOp2();
+
+        // Example3: GT_EQ(int, op1 of type ubyte, op2 of type ubyte) - in this case codegen uses
+        // ubyte as the result of comparison and if the result needs to be materialized into a reg
+        // simply zero extend it to TYP_INT size.  Here is an example of generated code:
+        //         cmp dl, byte ptr[addr mode]
+        //         movzx edx, dl
+        if (varTypeIsByte(op1) && varTypeIsByte(op2))
+        {
+            return true;
+        }
+        // Example4: GT_EQ(int, op1 of type ubyte, op2 is GT_CNS_INT) - in this case codegen uses
+        // ubyte as the result of the comparison and if the result needs to be materialized into a reg
+        // simply zero extend it to TYP_INT size.
+        else if (varTypeIsByte(op1) && op2->IsCnsIntOrI())
+        {
+            return true;
+        }
+        // Example4: GT_EQ(int, op1 is GT_CNS_INT, op2 of type ubyte) - in this case codegen uses
+        // ubyte as the result of the comparison and if the result needs to be materialized into a reg
+        // simply zero extend it to TYP_INT size.
+        else if (op1->IsCnsIntOrI() && varTypeIsByte(op2))
+        {
+            return true;
+        }
+        else
+        {
+            return false;
+        }
+    }
+    else
+    {
+        return false;
+    }
+}
+#endif
 
 #endif // _TARGET_XARCH_
 
