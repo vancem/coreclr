@@ -292,7 +292,9 @@ HRESULT ClrDataAccess::EnumMemCLRStatic(IN CLRDataEnumMemoryFlags flags)
     CATCH_ALL_EXCEPT_RETHROW_COR_E_OPERATIONCANCELLED( g_pValueTypeClass.EnumMem(); )
     CATCH_ALL_EXCEPT_RETHROW_COR_E_OPERATIONCANCELLED( g_pEnumClass.EnumMem(); )
     CATCH_ALL_EXCEPT_RETHROW_COR_E_OPERATIONCANCELLED( g_pThreadClass.EnumMem(); )
+#ifdef FEATURE_CER
     CATCH_ALL_EXCEPT_RETHROW_COR_E_OPERATIONCANCELLED( g_pCriticalFinalizerObjectClass.EnumMem(); )
+#endif
     CATCH_ALL_EXCEPT_RETHROW_COR_E_OPERATIONCANCELLED( g_pFreeObjectMethodTable.EnumMem(); )
     CATCH_ALL_EXCEPT_RETHROW_COR_E_OPERATIONCANCELLED( g_pObjectCtorMD.EnumMem(); )
     CATCH_ALL_EXCEPT_RETHROW_COR_E_OPERATIONCANCELLED( g_fHostConfig.EnumMem(); )
@@ -796,10 +798,9 @@ HRESULT ClrDataAccess::EnumMemWalkStackHelper(CLRDataEnumMemoryFlags flags,
         currentSP = dac_cast<TADDR>(pThread->GetCachedStackLimit()) + sizeof(TADDR);
 
         // exhaust the frames using DAC api
-        bool frameHadContext;
         for (; status == S_OK; )
         {
-            frameHadContext = false;
+            bool frameHadContext = false;
             status = pStackWalk->GetFrame(&pFrame);
             PCODE addr = NULL;
             if (status == S_OK && pFrame != NULL)

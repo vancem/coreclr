@@ -70,7 +70,7 @@ namespace System {
             if ((object)elementType == null)
                 ThrowHelper.ThrowArgumentNullException(ExceptionArgument.elementType);
             if (length < 0)
-                ThrowHelper.ThrowArgumentOutOfRangeException(ExceptionArgument.length, ExceptionResource.ArgumentOutOfRange_NeedNonNegNum);
+                ThrowHelper.ThrowLengthArgumentOutOfRange_ArgumentOutOfRange_NeedNonNegNum();
             Contract.Ensures(Contract.Result<Array>() != null);
             Contract.Ensures(Contract.Result<Array>().Length == length);
             Contract.Ensures(Contract.Result<Array>().Rank == 1);
@@ -904,7 +904,7 @@ namespace System {
             if (index < lb)
                 ThrowHelper.ThrowIndexArgumentOutOfRange_NeedNonNegNumException();
             if (length < 0)
-                ThrowHelper.ThrowArgumentOutOfRangeException(ExceptionArgument.length, ExceptionResource.ArgumentOutOfRange_NeedNonNegNum);
+                ThrowHelper.ThrowLengthArgumentOutOfRange_ArgumentOutOfRange_NeedNonNegNum();
             if (array.Length - (index - lb) < length)
                 ThrowHelper.ThrowArgumentException(ExceptionResource.Argument_InvalidOffLen);
             if (array.Rank != 1)
@@ -1002,7 +1002,7 @@ namespace System {
             if (index < 0)
                 ThrowHelper.ThrowIndexArgumentOutOfRange_NeedNonNegNumException();
             if (length < 0)
-                ThrowHelper.ThrowArgumentOutOfRangeException(ExceptionArgument.length, ExceptionResource.ArgumentOutOfRange_NeedNonNegNum);
+                ThrowHelper.ThrowLengthArgumentOutOfRange_ArgumentOutOfRange_NeedNonNegNum();
 
             if (array.Length - index < length)
                 ThrowHelper.ThrowArgumentException(ExceptionResource.Argument_InvalidOffLen);
@@ -1073,6 +1073,42 @@ namespace System {
             return Array.FindIndex(array, match) != -1;
         }
 
+        public static void Fill<T>(T[] array, T value)
+        {
+            if (array == null)
+            {
+                ThrowHelper.ThrowArgumentNullException(ExceptionArgument.array);
+            }
+
+            for (int i = 0; i < array.Length; i++)
+            {
+                array[i] = value;
+            }
+        }
+
+        public static void Fill<T>(T[] array, T value, int startIndex, int count)
+        {
+            if (array == null)
+            {
+                ThrowHelper.ThrowArgumentNullException(ExceptionArgument.array);
+            }
+
+            if (startIndex < 0 || startIndex > array.Length)
+            {
+                ThrowHelper.ThrowStartIndexArgumentOutOfRange_ArgumentOutOfRange_Index();
+            }
+
+            if (count < 0 || startIndex > array.Length - count)
+            {
+                ThrowHelper.ThrowCountArgumentOutOfRange_ArgumentOutOfRange_Count();
+            }
+
+            for (int i = startIndex; i < startIndex + count; i++)
+            {
+                array[i] = value;
+            }
+        }
+
         public static T Find<T>(T[] array, Predicate<T> match) {
             if( array == null) {
                 ThrowHelper.ThrowArgumentNullException(ExceptionArgument.array);
@@ -1136,11 +1172,11 @@ namespace System {
             }
 
             if( startIndex < 0 || startIndex > array.Length ) {
-                ThrowHelper.ThrowArgumentOutOfRangeException(ExceptionArgument.startIndex, ExceptionResource.ArgumentOutOfRange_Index);
+                ThrowHelper.ThrowStartIndexArgumentOutOfRange_ArgumentOutOfRange_Index();
             }
 
             if (count < 0 || startIndex > array.Length - count) {
-                ThrowHelper.ThrowArgumentOutOfRangeException(ExceptionArgument.count, ExceptionResource.ArgumentOutOfRange_Count);
+                ThrowHelper.ThrowCountArgumentOutOfRange_ArgumentOutOfRange_Count();
             }
 
             if( match == null) {
@@ -1205,19 +1241,19 @@ namespace System {
             if(array.Length == 0) {
                 // Special case for 0 length List
                 if( startIndex != -1) {
-                    ThrowHelper.ThrowArgumentOutOfRangeException(ExceptionArgument.startIndex, ExceptionResource.ArgumentOutOfRange_Index);
+                    ThrowHelper.ThrowStartIndexArgumentOutOfRange_ArgumentOutOfRange_Index();
                 }
             }
             else {
                 // Make sure we're not out of range            
                 if ( startIndex < 0 || startIndex >= array.Length) {
-                    ThrowHelper.ThrowArgumentOutOfRangeException(ExceptionArgument.startIndex, ExceptionResource.ArgumentOutOfRange_Index);
+                    ThrowHelper.ThrowStartIndexArgumentOutOfRange_ArgumentOutOfRange_Index();
                 }
             }
             
             // 2nd have of this also catches when startIndex == MAXINT, so MAXINT - 0 + 1 == -1, which is < 0.
             if (count < 0 || startIndex - count + 1 < 0) {
-                ThrowHelper.ThrowArgumentOutOfRangeException(ExceptionArgument.count, ExceptionResource.ArgumentOutOfRange_Count);
+                ThrowHelper.ThrowCountArgumentOutOfRange_ArgumentOutOfRange_Count();
             }
 
             int endIndex = startIndex - count;
@@ -1305,9 +1341,9 @@ namespace System {
 
             int lb = array.GetLowerBound(0);
             if (startIndex < lb || startIndex > array.Length + lb)
-                ThrowHelper.ThrowArgumentOutOfRangeException(ExceptionArgument.startIndex, ExceptionResource.ArgumentOutOfRange_Index);
+                ThrowHelper.ThrowStartIndexArgumentOutOfRange_ArgumentOutOfRange_Index();
             if (count < 0 || count > array.Length - startIndex + lb)
-                ThrowHelper.ThrowArgumentOutOfRangeException(ExceptionArgument.count, ExceptionResource.ArgumentOutOfRange_Count);
+                ThrowHelper.ThrowCountArgumentOutOfRange_ArgumentOutOfRange_Count();
 
             // Try calling a quick native method to handle primitive types.
             int retVal;
@@ -1376,11 +1412,11 @@ namespace System {
             }
 
             if (startIndex < 0 || startIndex > array.Length ) {
-                ThrowHelper.ThrowArgumentOutOfRangeException(ExceptionArgument.startIndex, ExceptionResource.ArgumentOutOfRange_Index);
+                ThrowHelper.ThrowStartIndexArgumentOutOfRange_ArgumentOutOfRange_Index();
             }
 
             if (count < 0 || count > array.Length - startIndex) {
-                ThrowHelper.ThrowArgumentOutOfRangeException(ExceptionArgument.count, ExceptionResource.ArgumentOutOfRange_Count);
+                ThrowHelper.ThrowCountArgumentOutOfRange_ArgumentOutOfRange_Count();
             }
             Contract.Ensures(Contract.Result<int>() < array.Length);
             Contract.EndContractBlock();
@@ -1442,9 +1478,9 @@ namespace System {
             }
 
             if (startIndex < lb || startIndex >= array.Length + lb)
-                ThrowHelper.ThrowArgumentOutOfRangeException(ExceptionArgument.startIndex, ExceptionResource.ArgumentOutOfRange_Index);
+                ThrowHelper.ThrowStartIndexArgumentOutOfRange_ArgumentOutOfRange_Index();
             if (count < 0)
-                ThrowHelper.ThrowArgumentOutOfRangeException(ExceptionArgument.count, ExceptionResource.ArgumentOutOfRange_Count);
+                ThrowHelper.ThrowCountArgumentOutOfRange_ArgumentOutOfRange_Count();
             if (count > startIndex - lb + 1)
                 ThrowHelper.ThrowArgumentOutOfRangeException(ExceptionArgument.endIndex, ExceptionResource.ArgumentOutOfRange_EndIndexStartIndex);
             if (array.Rank != 1)
@@ -1518,24 +1554,24 @@ namespace System {
                 // accept -1 and 0 as valid startIndex for compablility reason.
                 //
                 if( startIndex != -1 && startIndex != 0) {
-                    ThrowHelper.ThrowArgumentOutOfRangeException(ExceptionArgument.startIndex, ExceptionResource.ArgumentOutOfRange_Index);
+                    ThrowHelper.ThrowStartIndexArgumentOutOfRange_ArgumentOutOfRange_Index();
                 }
 
                 // only 0 is a valid value for count if array is empty
                 if( count != 0) {
-                    ThrowHelper.ThrowArgumentOutOfRangeException(ExceptionArgument.count, ExceptionResource.ArgumentOutOfRange_Count);
+                    ThrowHelper.ThrowCountArgumentOutOfRange_ArgumentOutOfRange_Count();
                 }
                 return -1;
             }
 
             // Make sure we're not out of range            
             if ( startIndex < 0 || startIndex >= array.Length) {
-                ThrowHelper.ThrowArgumentOutOfRangeException(ExceptionArgument.startIndex, ExceptionResource.ArgumentOutOfRange_Index);
+                ThrowHelper.ThrowStartIndexArgumentOutOfRange_ArgumentOutOfRange_Index();
             }
             
             // 2nd have of this also catches when startIndex == MAXINT, so MAXINT - 0 + 1 == -1, which is < 0.
             if (count < 0 || startIndex - count + 1 < 0) {
-                ThrowHelper.ThrowArgumentOutOfRangeException(ExceptionArgument.count, ExceptionResource.ArgumentOutOfRange_Count);
+                ThrowHelper.ThrowCountArgumentOutOfRange_ArgumentOutOfRange_Count();
             }
 
             return EqualityComparer<T>.Default.LastIndexOf(array, value, startIndex, count);            
@@ -1575,7 +1611,7 @@ namespace System {
             if (index < lowerBound)
                 ThrowHelper.ThrowIndexArgumentOutOfRange_NeedNonNegNumException();
             if (length < 0)
-                ThrowHelper.ThrowArgumentOutOfRangeException(ExceptionArgument.length, ExceptionResource.ArgumentOutOfRange_NeedNonNegNum);
+                ThrowHelper.ThrowLengthArgumentOutOfRange_ArgumentOutOfRange_NeedNonNegNum();
 
             if (array.Length - (index - lowerBound) < length)
                 ThrowHelper.ThrowArgumentException(ExceptionResource.Argument_InvalidOffLen);
@@ -1632,7 +1668,7 @@ namespace System {
             if (index < 0)
                 ThrowHelper.ThrowIndexArgumentOutOfRange_NeedNonNegNumException();
             if (length < 0)
-                ThrowHelper.ThrowArgumentOutOfRangeException(ExceptionArgument.length, ExceptionResource.ArgumentOutOfRange_NeedNonNegNum);
+                ThrowHelper.ThrowLengthArgumentOutOfRange_ArgumentOutOfRange_NeedNonNegNum();
             if (array.Length - index < length)
                 ThrowHelper.ThrowArgumentException(ExceptionResource.Argument_InvalidOffLen);
             Contract.EndContractBlock();
@@ -1757,7 +1793,7 @@ namespace System {
             if (index < keysLowerBound)
                 ThrowHelper.ThrowIndexArgumentOutOfRange_NeedNonNegNumException();
             if (length < 0)
-                ThrowHelper.ThrowArgumentOutOfRangeException(ExceptionArgument.length, ExceptionResource.ArgumentOutOfRange_NeedNonNegNum);
+                ThrowHelper.ThrowLengthArgumentOutOfRange_ArgumentOutOfRange_NeedNonNegNum();
 
             if (keys.Length - (index - keysLowerBound) < length || (items != null && (index - keysLowerBound) > items.Length - length))
                 ThrowHelper.ThrowArgumentException(ExceptionResource.Argument_InvalidOffLen);
@@ -1841,7 +1877,7 @@ namespace System {
             if (index < 0)
                 ThrowHelper.ThrowIndexArgumentOutOfRange_NeedNonNegNumException();
             if (length < 0)
-                ThrowHelper.ThrowArgumentOutOfRangeException(ExceptionArgument.length, ExceptionResource.ArgumentOutOfRange_NeedNonNegNum);
+                ThrowHelper.ThrowLengthArgumentOutOfRange_ArgumentOutOfRange_NeedNonNegNum();
             if (array.Length - index < length)
                 ThrowHelper.ThrowArgumentException(ExceptionResource.Argument_InvalidOffLen);
             Contract.EndContractBlock();
@@ -1865,7 +1901,7 @@ namespace System {
             if (index < 0)
                 ThrowHelper.ThrowIndexArgumentOutOfRange_NeedNonNegNumException();
             if (length < 0)
-                ThrowHelper.ThrowArgumentOutOfRangeException(ExceptionArgument.length, ExceptionResource.ArgumentOutOfRange_NeedNonNegNum);
+                ThrowHelper.ThrowLengthArgumentOutOfRange_ArgumentOutOfRange_NeedNonNegNum();
             if (keys.Length - index < length || (items != null && index > items.Length - length))
                 ThrowHelper.ThrowArgumentException(ExceptionResource.Argument_InvalidOffLen);
             Contract.EndContractBlock();
@@ -2589,8 +2625,8 @@ namespace System {
     
             public Object Current {
                 get {
-                    if (_index < 0) ThrowHelper.ThrowInvalidOperationException(ExceptionResource.InvalidOperation_EnumNotStarted);
-                    if (_index >= _endIndex) ThrowHelper.ThrowInvalidOperationException(ExceptionResource.InvalidOperation_EnumEnded);
+                    if (_index < 0) ThrowHelper.ThrowInvalidOperationException_InvalidOperation_EnumNotStarted();
+                    if (_index >= _endIndex) ThrowHelper.ThrowInvalidOperationException_InvalidOperation_EnumEnded();
                     return _array.GetValue(_index);
                 }
             }
@@ -2667,8 +2703,8 @@ namespace System {
     
             public Object Current {
                 get {
-                    if (index < startIndex) ThrowHelper.ThrowInvalidOperationException(ExceptionResource.InvalidOperation_EnumNotStarted);
-                    if (_complete) ThrowHelper.ThrowInvalidOperationException(ExceptionResource.InvalidOperation_EnumEnded);
+                    if (index < startIndex) ThrowHelper.ThrowInvalidOperationException_InvalidOperation_EnumNotStarted();
+                    if (_complete) ThrowHelper.ThrowInvalidOperationException_InvalidOperation_EnumEnded();
                     return array.GetValue(_indices);
                 }
             }
@@ -2866,8 +2902,8 @@ namespace System {
     
             public T Current {
                 get {
-                    if (_index < 0) ThrowHelper.ThrowInvalidOperationException(ExceptionResource.InvalidOperation_EnumNotStarted);
-                    if (_index >= _endIndex) ThrowHelper.ThrowInvalidOperationException(ExceptionResource.InvalidOperation_EnumEnded);
+                    if (_index < 0) ThrowHelper.ThrowInvalidOperationException_InvalidOperation_EnumNotStarted();
+                    if (_index >= _endIndex) ThrowHelper.ThrowInvalidOperationException_InvalidOperation_EnumEnded();
                     return _array[_index];
                 }
             }

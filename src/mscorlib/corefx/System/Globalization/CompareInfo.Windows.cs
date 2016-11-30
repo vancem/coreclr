@@ -356,12 +356,12 @@ namespace System.Globalization
 
         private unsafe SortKey CreateSortKey(String source, CompareOptions options)
         {
-            if (source==null) { throw new ArgumentNullException("source"); }
+            if (source==null) { throw new ArgumentNullException(nameof(source)); }
             Contract.EndContractBlock();
 
             if ((options & ValidSortkeyCtorMaskOffFlags) != 0)
             {
-                throw new ArgumentException(Environment.GetResourceString("Argument_InvalidFlag"), "options");
+                throw new ArgumentException(Environment.GetResourceString("Argument_InvalidFlag"), nameof(options));
             }
 
             throw new NotImplementedException();
@@ -410,6 +410,11 @@ namespace System.Globalization
                              (options == CompareOptions.Ordinal), "[CompareInfo.GetNativeCompareFlags]Expected all flags to be handled");
 
             return nativeCompareFlags;
+        }
+        
+        private SortVersion GetSortVersion()
+        {
+            throw new NotImplementedException();
         }
     }
 }

@@ -50,6 +50,7 @@ function print_usage {
     echo '  --jitstressregs=<n>              : Runs the tests with COMPlus_JitStressRegs=n'
     echo '  --jitminopts                     : Runs the tests with COMPlus_JITMinOpts=1'
     echo '  --jitforcerelocs                 : Runs the tests with COMPlus_ForceRelocs=1'
+    echo '  --jitdisasm                      : Runs jit-dasm on the tests'
     echo '  --gcstresslevel n                : Runs the tests with COMPlus_GCStress=n'
     echo '    0: None                                1: GC on all allocs and '"'easy'"' places'
     echo '    2: GC on transitions to preemptive GC  4: GC on every allowable JITed instr'
@@ -392,31 +393,43 @@ function create_core_overlay {
         # Test dependencies come from a Windows build, and mscorlib.ni.dll would be the one from Windows
         rm -f "$coreOverlayDir/mscorlib.ni.dll"
     fi
+    if [ -f "$coreOverlayDir/System.Private.CoreLib.ni.dll" ]; then
+        # Test dependencies come from a Windows build, and System.Private.CoreLib.ni.dll would be the one from Windows
+        rm -f "$coreOverlayDir/System.Private.CoreLib.ni.dll"
+    fi
     copy_test_native_bin_to_test_root
 }
 
 function precompile_overlay_assemblies {
 
     if [ $doCrossgen == 1 ]; then
-
         local overlayDir=$CORE_ROOT
 
         filesToPrecompile=$(ls -trh $overlayDir/*.dll)
         for fileToPrecompile in ${filesToPrecompile}
         do
             local filename=${fileToPrecompile}
-            # Precompile any assembly except mscorlib since we already have its NI image available.
-            if [[ "$filename" != *"mscorlib.dll"* ]]; then
-                if [[ "$filename" != *"mscorlib.ni.dll"* ]]; then
-                    echo Precompiling $filename
-                    $overlayDir/crossgen /Platform_Assemblies_Paths $overlayDir $filename 2>/dev/null
-                    local exitCode=$?
-                    if [ $exitCode == -2146230517 ]; then
-                        echo $filename is not a managed assembly.
-                    elif [ $exitCode != 0 ]; then
-                        echo Unable to precompile $filename.
-                    else
-                        echo Successfully precompiled $filename
+            if [ $jitdisasm == 1]; then
+
+                $overlayDir/corerun $overlayDir/jit-dasm.dll --crossgen $overlayDir/crossgen --platform $overlayDir --output $testRootDir/dasm $filename
+                local exitCode=$?
+                if [ $exitCode != 0 ]; then
+                    echo Unable to generate dasm for $filename
+                fi
+            else
+                # Precompile any assembly except mscorlib since we already have its NI image available.
+                if [[ "$filename" != *"mscorlib.dll"* ]]; then
+                    if [[ "$filename" != *"mscorlib.ni.dll"* ]]; then
+                        echo Precompiling $filename
+                        $overlayDir/crossgen /Platform_Assemblies_Paths $overlayDir $filename 2>/dev/null
+                        local exitCode=$?
+                        if [ $exitCode == -2146230517 ]; then
+                            echo $filename is not a managed assembly.
+                        elif [ $exitCode != 0 ]; then
+                            echo Unable to precompile $filename.
+                        else
+                            echo Successfully precompiled $filename
+                        fi
                     fi
                 fi
             fi
@@ -738,10 +751,14 @@ function finish_test {
     local testRunningTime=
     local header=
 
+    if ((verbose == 1)); then
+        header=$(printf "[%4d]" $countTotalTests)
+    fi
+
     if [ "$showTime" == "ON" ]; then
         testEndTime=$(date +%s)
-        testRunningTime=$(echo "$testEndTime - ${testStartTimes[$nextProcessIndex]}" | bc)
-        header=$(printf "[%03d:%4.0fs] " "$countTotalTests" "$testRunningTime")
+        testRunningTime=$(( $testEndTime - ${testStartTimes[$nextProcessIndex]} ))
+        header=$header$(printf "[%4ds]" $testRunningTime)
     fi
 
     local xunitTestResult
@@ -969,6 +986,7 @@ limitedCoreDumps=
 # Handle arguments
 verbose=0
 doCrossgen=0
+jitdisasm=0
 
 for i in "$@"
 do
@@ -994,6 +1012,9 @@ do
             ;;
         --jitforcerelocs)
             export COMPlus_ForceRelocs=1
+            ;;
+        --jitdisasm)
+            jitdisasm=1
             ;;
         --testRootDir=*)
             testRootDir=${i#*=}
@@ -1119,6 +1140,11 @@ fi
 if [ ! -z "$gcsimulator" ]; then
     echo "Running GC simulator tests"
     export RunningGCSimulatorTests=1
+fi
+
+if [ ! -z "$jitdisasm" ]; then
+    echo "Running jit disasm"
+    export RunningJitDisasm=1
 fi
 
 # If this is a coverage run, make sure the appropriate args have been passed

@@ -267,6 +267,9 @@
         <ExcludeList Include="$(XunitTestBinBase)\JIT\Regression\JitBlue\DevDiv_255294\DevDiv_255294\DevDiv_255294.cmd">
             <Issue>The test is too large for x86 and causes OutOfMemory exception.</Issue>
         </ExcludeList>
+        <ExcludeList Include="$(XunitTestBinBase)\JIT\superpmi\superpmicollect\superpmicollect.cmd">
+            <Issue>The superpmi test depends on setting COMPlus_AltJit, so doesn't work with either the legacy jit test run, which also sets COMPlus_AltJit, or the compatjit test run, which sets COMPlus_UseWindowsX86CoreLegacyJit</Issue>
+        </ExcludeList>
     </ItemGroup>
 
     <!-- Tests that need to be triaged for vararg usage as that is not supported -->
@@ -438,6 +441,9 @@
         </ExcludeList>
         <ExcludeList Include="$(XunitTestBinBase)\JIT\Regression\CLR-x86-JIT\V2.0-Beta2\b409748\b409748\b409748.cmd">
             <Issue>needs triage</Issue>
+        </ExcludeList>
+        <ExcludeList Include="$(XunitTestBinBase)\JIT\Regression\JitBlue\DevDiv_283795\DevDiv_283795\DevDiv_283795.cmd">
+            <Issue>8077</Issue>
         </ExcludeList>
     </ItemGroup>
 </Project>

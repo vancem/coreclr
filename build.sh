@@ -217,6 +217,7 @@ build_coreclr()
         echo "Failed to build coreclr components."
         exit 1
     fi
+
 	popd
 }
 
@@ -256,6 +257,9 @@ isMSBuildOnNETCoreSupported()
                     __isMSBuildOnNETCoreSupported=1
                     ;;
                 "ubuntu.16.10-x64")
+                    __isMSBuildOnNETCoreSupported=1
+                    ;;
+                "alpine.3.4.3-x64")
                     __isMSBuildOnNETCoreSupported=1
                     ;;
                 *)
@@ -569,7 +573,6 @@ while :; do
             __ConfigureOnly=1
             __SkipMSCorLib=1
             __SkipNuget=1
-            __IncludeTests=
             ;;
 
         skipconfigure)

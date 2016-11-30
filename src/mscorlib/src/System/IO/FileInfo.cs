@@ -50,7 +50,7 @@ namespace System.IO {
         public static FileInfo UnsafeCreateFileInfo(String fileName)
         {
             if (fileName == null)
-                throw new ArgumentNullException("fileName");
+                throw new ArgumentNullException(nameof(fileName));
             Contract.EndContractBlock();
 
             FileInfo fi = new FileInfo();
@@ -63,7 +63,7 @@ namespace System.IO {
         public FileInfo(String fileName)
         {
             if (fileName == null)
-                throw new ArgumentNullException("fileName");
+                throw new ArgumentNullException(nameof(fileName));
             Contract.EndContractBlock();
 
             Init(fileName, true);
@@ -74,7 +74,7 @@ namespace System.IO {
         {
             OriginalPath = fileName;
             // Must fully qualify the path for the security check
-            String fullPath = Path.GetFullPathInternal(fileName);
+            String fullPath = Path.GetFullPath(fileName);
 #if FEATURE_CORECLR
             if (checkHost)
             {
@@ -115,7 +115,7 @@ namespace System.IO {
 #endif //FEATURE_CORESYSTEM
         internal FileInfo(String fullPath, bool ignoreThis)
         {
-            Contract.Assert(Path.GetRootLength(fullPath) > 0, "fullPath must be fully qualified!");
+            Contract.Assert(PathInternal.GetRootLength(fullPath) > 0, "fullPath must be fully qualified!");
             _name = Path.GetFileName(fullPath);
             OriginalPath = _name;
             FullPath = fullPath;
@@ -232,9 +232,9 @@ namespace System.IO {
         // 
         public FileInfo CopyTo(String destFileName) {
             if (destFileName == null)
-                throw new ArgumentNullException("destFileName", Environment.GetResourceString("ArgumentNull_FileName"));
+                throw new ArgumentNullException(nameof(destFileName), Environment.GetResourceString("ArgumentNull_FileName"));
             if (destFileName.Length == 0)
-                throw new ArgumentException(Environment.GetResourceString("Argument_EmptyFileName"), "destFileName");
+                throw new ArgumentException(Environment.GetResourceString("Argument_EmptyFileName"), nameof(destFileName));
             Contract.EndContractBlock();
 
             destFileName = File.InternalCopy(FullPath, destFileName, false, true);
@@ -253,9 +253,9 @@ namespace System.IO {
         // 
         public FileInfo CopyTo(String destFileName, bool overwrite) {
             if (destFileName == null)
-                throw new ArgumentNullException("destFileName", Environment.GetResourceString("ArgumentNull_FileName"));
+                throw new ArgumentNullException(nameof(destFileName), Environment.GetResourceString("ArgumentNull_FileName"));
             if (destFileName.Length == 0)
-                throw new ArgumentException(Environment.GetResourceString("Argument_EmptyFileName"), "destFileName");
+                throw new ArgumentException(Environment.GetResourceString("Argument_EmptyFileName"), nameof(destFileName));
             Contract.EndContractBlock();
 
             destFileName = File.InternalCopy(FullPath, destFileName, overwrite, true);
@@ -383,12 +383,12 @@ namespace System.IO {
         [System.Security.SecuritySafeCritical]
         public void MoveTo(String destFileName) {
             if (destFileName==null)
-                throw new ArgumentNullException("destFileName");
+                throw new ArgumentNullException(nameof(destFileName));
             if (destFileName.Length==0)
-                throw new ArgumentException(Environment.GetResourceString("Argument_EmptyFileName"), "destFileName");
+                throw new ArgumentException(Environment.GetResourceString("Argument_EmptyFileName"), nameof(destFileName));
             Contract.EndContractBlock();
 
-            String fullDestFileName = Path.GetFullPathInternal(destFileName);
+            string fullDestFileName = Path.GetFullPath(destFileName);
 #if FEATURE_CORECLR
             FileSecurityState sourceState = new FileSecurityState(FileSecurityStateAccess.Write | FileSecurityStateAccess.Read, DisplayPath, FullPath);
             FileSecurityState destState = new FileSecurityState(FileSecurityStateAccess.Write, destFileName, fullDestFileName);

@@ -218,6 +218,10 @@ DEFINE_DACVAR(ULONG, UNKNOWN_POINTER_TYPE, dac__g_pStringClass, ::g_pStringClass
 DEFINE_DACVAR(ULONG, UNKNOWN_POINTER_TYPE, dac__g_pArrayClass, ::g_pArrayClass)
 DEFINE_DACVAR(ULONG, UNKNOWN_POINTER_TYPE, dac__g_pSZArrayHelperClass, ::g_pSZArrayHelperClass)
 DEFINE_DACVAR(ULONG, UNKNOWN_POINTER_TYPE, dac__g_pNullableClass, ::g_pNullableClass)
+#ifdef FEATURE_SPAN_OF_T
+DEFINE_DACVAR(ULONG, UNKNOWN_POINTER_TYPE, dac__g_pSpanClass, ::g_pSpanClass)
+DEFINE_DACVAR(ULONG, UNKNOWN_POINTER_TYPE, dac__g_pReadOnlySpanClass, ::g_pReadOnlySpanClass)
+#endif
 DEFINE_DACVAR(ULONG, UNKNOWN_POINTER_TYPE, dac__g_pExceptionClass, ::g_pExceptionClass)
 DEFINE_DACVAR(ULONG, UNKNOWN_POINTER_TYPE, dac__g_pThreadAbortExceptionClass, ::g_pThreadAbortExceptionClass)
 DEFINE_DACVAR(ULONG, UNKNOWN_POINTER_TYPE, dac__g_pOutOfMemoryExceptionClass, ::g_pOutOfMemoryExceptionClass)
@@ -230,8 +234,12 @@ DEFINE_DACVAR(ULONG, UNKNOWN_POINTER_TYPE, dac__g_pOverlappedDataClass, ::g_pOve
 DEFINE_DACVAR(ULONG, UNKNOWN_POINTER_TYPE, dac__g_pValueTypeClass, ::g_pValueTypeClass)
 DEFINE_DACVAR(ULONG, UNKNOWN_POINTER_TYPE, dac__g_pEnumClass, ::g_pEnumClass)
 DEFINE_DACVAR(ULONG, UNKNOWN_POINTER_TYPE, dac__g_pThreadClass, ::g_pThreadClass)
+#ifdef FEATURE_CER
 DEFINE_DACVAR(ULONG, UNKNOWN_POINTER_TYPE, dac__g_pCriticalFinalizerObjectClass, ::g_pCriticalFinalizerObjectClass)
+#endif
+#ifndef FEATURE_CORECLR
 DEFINE_DACVAR(ULONG, UNKNOWN_POINTER_TYPE, dac__g_pAsyncFileStream_AsyncResultClass, ::g_pAsyncFileStream_AsyncResultClass)
+#endif // !FEATURE_CORECLR
 DEFINE_DACVAR(ULONG, UNKNOWN_POINTER_TYPE, dac__g_pPredefinedArrayTypes, ::g_pPredefinedArrayTypes)
 DEFINE_DACVAR(ULONG, UNKNOWN_POINTER_TYPE, dac__g_TypedReferenceMT, ::g_TypedReferenceMT)
 DEFINE_DACVAR(ULONG, UNKNOWN_POINTER_TYPE, dac__g_pByteArrayMT, ::g_pByteArrayMT)
@@ -245,7 +253,9 @@ DEFINE_DACVAR(ULONG, UNKNOWN_POINTER_TYPE, dac__g_pBaseRuntimeClass, ::g_pBaseRu
 DEFINE_DACVAR(ULONG, UNKNOWN_POINTER_TYPE, dac__g_pICastableInterface, ::g_pICastableInterface)
 #endif // FEATURE_ICASTABLE
 
+#ifdef FEATURE_CER
 DEFINE_DACVAR(ULONG, UNKNOWN_POINTER_TYPE, dac__g_pPrepareConstrainedRegionsMethod, ::g_pPrepareConstrainedRegionsMethod)
+#endif
 DEFINE_DACVAR(ULONG, UNKNOWN_POINTER_TYPE, dac__g_pExecuteBackoutCodeHelperMethod, ::g_pExecuteBackoutCodeHelperMethod)
 
 DEFINE_DACVAR(ULONG, UNKNOWN_POINTER_TYPE, dac__g_pObjectCtorMD, ::g_pObjectCtorMD)

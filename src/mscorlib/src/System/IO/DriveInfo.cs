@@ -57,13 +57,13 @@ namespace System.IO
         public DriveInfo(String driveName) 
         {
             if (driveName == null)
-                throw new ArgumentNullException("driveName");
+                throw new ArgumentNullException(nameof(driveName));
             Contract.EndContractBlock();
             if (driveName.Length == 1)
                 _name = driveName + ":\\";
             else {
                 // GetPathRoot does not check all invalid characters
-                Path.CheckInvalidPathChars(driveName); 
+                PathInternal.CheckInvalidPathChars(driveName); 
                 _name = Path.GetPathRoot(driveName);
                 // Disallow null or empty drive letters and UNC paths
                 if (_name == null || _name.Length == 0 || _name.StartsWith("\\\\", StringComparison.Ordinal))

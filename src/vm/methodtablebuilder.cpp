@@ -191,6 +191,7 @@ MethodTableBuilder::CreateClass( Module *pModule,
         pEEClass->GetSecurityProperties()->SetFlags(dwSecFlags, dwNullDeclFlags);
     }
 
+#ifdef FEATURE_CER
     // Cache class level reliability contract info.
     DWORD dwReliabilityContract = ::GetReliabilityContract(pInternalImport, cl);
     if (dwReliabilityContract != RC_NULL)
@@ -201,6 +202,7 @@ MethodTableBuilder::CreateClass( Module *pModule,
         
         pEEClass->SetReliabilityContract(dwReliabilityContract);
     }
+#endif // FEATURE_CER
 
     if (fHasLayout)
         pEEClass->SetHasLayout();
@@ -1218,7 +1220,7 @@ BOOL MethodTableBuilder::CheckIfSIMDAndUpdateSize()
 {
     STANDARD_VM_CONTRACT;
 
-#ifdef _TARGET_AMD64_
+#if defined(_TARGET_X86_) || defined(_TARGET_AMD64_)
     if (!GetAssembly()->IsSIMDVectorAssembly())
         return false;
 
@@ -1245,8 +1247,8 @@ BOOL MethodTableBuilder::CheckIfSIMDAndUpdateSize()
     EEJitManager *jitMgr = ExecutionManager::GetEEJitManager();
     if (jitMgr->LoadJIT())
     {
-        DWORD cpuCompileFlags = jitMgr->GetCPUCompileFlags();
-        if ((cpuCompileFlags & CORJIT_FLG_FEATURE_SIMD) != 0)
+        CORJIT_FLAGS cpuCompileFlags = jitMgr->GetCPUCompileFlags();
+        if (cpuCompileFlags.IsSet(CORJIT_FLAGS::CORJIT_FLAG_FEATURE_SIMD))
         {
             unsigned intrinsicSIMDVectorLength = jitMgr->m_jit->getMaxIntrinsicSIMDVectorLength(cpuCompileFlags);
             if (intrinsicSIMDVectorLength != 0)
@@ -1262,7 +1264,7 @@ BOOL MethodTableBuilder::CheckIfSIMDAndUpdateSize()
         }
     }
 #endif // !CROSSGEN_COMPILE
-#endif // _TARGET_AMD64_
+#endif // defined(_TARGET_X86_) || defined(_TARGET_AMD64_)
     return false;
 }
 
@@ -10201,15 +10203,36 @@ void MethodTableBuilder::CheckForSystemTypes()
     MethodTable * pMT = GetHalfBakedMethodTable();
     EEClass * pClass = GetHalfBakedClass();
 
-    // We can exit early for generic types - there is just one case to check for.
-    if (g_pNullableClass != NULL && bmtGenerics->HasInstantiation())
+    // We can exit early for generic types - there are just a few cases to check for.
+    if (bmtGenerics->HasInstantiation() && g_pNullableClass != NULL)
     {
+#ifdef FEATURE_SPAN_OF_T
+        _ASSERTE(g_pSpanClass != NULL);
+        _ASSERTE(g_pReadOnlySpanClass != NULL);
+
+        _ASSERTE(g_pSpanClass->IsByRefLike());
+        _ASSERTE(g_pReadOnlySpanClass->IsByRefLike());
+
+        if (GetCl() == g_pSpanClass->GetCl())
+        {
+            pMT->SetIsByRefLike();
+            return;
+        }
+
+        if (GetCl() == g_pReadOnlySpanClass->GetCl())
+        {
+            pMT->SetIsByRefLike();
+            return;
+        }
+#endif
+
         _ASSERTE(g_pNullableClass->IsNullable());
 
         // Pre-compute whether the class is a Nullable<T> so that code:Nullable::IsNullableType is efficient
         // This is useful to the performance of boxing/unboxing a Nullable
         if (GetCl() == g_pNullableClass->GetCl())
             pMT->SetIsNullable();
+
         return;
     }
 
@@ -10257,6 +10280,16 @@ void MethodTableBuilder::CheckForSystemTypes()
         {
             pMT->SetIsNullable();
         }
+#ifdef FEATURE_SPAN_OF_T
+        else if (strcmp(name, g_SpanName) == 0)
+        {
+            pMT->SetIsByRefLike();
+        }
+        else if (strcmp(name, g_ReadOnlySpanName) == 0)
+        {
+            pMT->SetIsByRefLike();
+        }
+#endif
         else if (strcmp(name, g_ArgIteratorName) == 0)
         {
             // Mark the special types that have embeded stack poitners in them

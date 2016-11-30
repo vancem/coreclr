@@ -39,7 +39,6 @@ namespace System.Reflection
         private String  _keyPairContainer;
         private byte[]  _publicKey;
 
-#if !FEATURE_CORECLR
         // Build key pair from file.
         [System.Security.SecuritySafeCritical]  // auto-generated
 #pragma warning disable 618
@@ -48,7 +47,7 @@ namespace System.Reflection
         public StrongNameKeyPair(FileStream keyPairFile)
         {
             if (keyPairFile == null)
-                throw new ArgumentNullException("keyPairFile");
+                throw new ArgumentNullException(nameof(keyPairFile));
             Contract.EndContractBlock();
 
             int length = (int)keyPairFile.Length;
@@ -57,7 +56,6 @@ namespace System.Reflection
 
             _keyPairExported = true;
         }
-#endif// FEATURE_CORECLR
 
         // Build key pair from byte array in memory.
         [System.Security.SecuritySafeCritical]  // auto-generated
@@ -67,7 +65,7 @@ namespace System.Reflection
         public StrongNameKeyPair(byte[] keyPairArray)
         {
             if (keyPairArray == null)
-                throw new ArgumentNullException("keyPairArray");
+                throw new ArgumentNullException(nameof(keyPairArray));
             Contract.EndContractBlock();
 
             _keyPairArray = new byte[keyPairArray.Length];
@@ -96,7 +94,7 @@ namespace System.Reflection
         public StrongNameKeyPair(String keyPairContainer)
         {
             if (keyPairContainer == null)
-                throw new ArgumentNullException("keyPairContainer");
+                throw new ArgumentNullException(nameof(keyPairContainer));
             Contract.EndContractBlock();
 
             _keyPairContainer = keyPairContainer;

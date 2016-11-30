@@ -66,14 +66,12 @@ void CodeGen::genCodeForBBlist()
 
     regSet.rsSpillBeg();
 
-#ifdef DEBUGGING_SUPPORT
     /* Initialize the line# tracking logic */
 
     if (compiler->opts.compScopeInfo)
     {
         siInit();
     }
-#endif
 
     // The current implementation of switch tables requires the first block to have a label so it
     // can generate offsets to the switch label targets.
@@ -296,14 +294,13 @@ void CodeGen::genCodeForBBlist()
         /* Both stacks are always empty on entry to a basic block */
 
         genStackLevel = 0;
-
+        genAdjustStackLevel(block);
         savedStkLvl = genStackLevel;
 
         /* Tell everyone which basic block we're working on */
 
         compiler->compCurBB = block;
 
-#ifdef DEBUGGING_SUPPORT
         siBeginBlock(block);
 
         // BBF_INTERNAL blocks don't correspond to any single IL instruction.
@@ -315,7 +312,6 @@ void CodeGen::genCodeForBBlist()
         }
 
         bool firstMapping = true;
-#endif // DEBUGGING_SUPPORT
 
         /*---------------------------------------------------------------------
          *
@@ -339,12 +335,9 @@ void CodeGen::genCodeForBBlist()
         // as we encounter it.
         CLANG_FORMAT_COMMENT_ANCHOR;
 
-#ifdef DEBUGGING_SUPPORT
         IL_OFFSETX currentILOffset = BAD_IL_OFFSET;
-#endif
         for (GenTree* node : LIR::AsRange(block).NonPhiNodes())
         {
-#ifdef DEBUGGING_SUPPORT
             // Do we have a new IL offset?
             if (node->OperGet() == GT_IL_OFFSET)
             {
@@ -353,7 +346,6 @@ void CodeGen::genCodeForBBlist()
                 genIPmappingAdd(currentILOffset, firstMapping);
                 firstMapping = false;
             }
-#endif // DEBUGGING_SUPPORT
 
 #ifdef DEBUG
             if (node->OperGet() == GT_IL_OFFSET)
@@ -443,7 +435,6 @@ void CodeGen::genCodeForBBlist()
         }
 #endif // defined(DEBUG)
 
-#ifdef DEBUGGING_SUPPORT
         // It is possible to reach the end of the block without generating code for the current IL offset.
         // For example, if the following IR ends the current block, no code will have been generated for
         // offset 21:
@@ -480,8 +471,6 @@ void CodeGen::genCodeForBBlist()
                 siCloseAllOpenScopes();
             }
         }
-
-#endif // DEBUGGING_SUPPORT
 
         genStackLevel -= savedStkLvl;
 
@@ -1197,17 +1186,22 @@ void CodeGen::genConsumeRegs(GenTree* tree)
 #ifdef _TARGET_XARCH_
         else if (tree->OperGet() == GT_LCL_VAR)
         {
-            // A contained lcl var must be living on stack and marked as reg optional.
+            // A contained lcl var must be living on stack and marked as reg optional, or not be a
+            // register candidate.
             unsigned   varNum = tree->AsLclVarCommon()->GetLclNum();
             LclVarDsc* varDsc = compiler->lvaTable + varNum;
 
             noway_assert(varDsc->lvRegNum == REG_STK);
-            noway_assert(tree->IsRegOptional());
+            noway_assert(tree->IsRegOptional() || !varDsc->lvLRACandidate);
 
-            // Update the life of reg optional lcl var.
+            // Update the life of the lcl var.
             genUpdateLife(tree);
         }
 #endif // _TARGET_XARCH_
+        else if (tree->OperIsInitVal())
+        {
+            genConsumeReg(tree->gtGetOp1());
+        }
         else
         {
 #ifdef FEATURE_SIMD
@@ -1416,6 +1410,13 @@ void CodeGen::genConsumeBlockSrc(GenTreeBlk* blkNode)
             return;
         }
     }
+    else
+    {
+        if (src->OperIsInitVal())
+        {
+            src = src->gtGetOp1();
+        }
+    }
     genConsumeReg(src);
 }
 
@@ -1442,6 +1443,13 @@ void CodeGen::genSetBlockSrc(GenTreeBlk* blkNode, regNumber srcReg)
             // Load its address into srcReg.
             inst_RV_TT(INS_lea, srcReg, src, 0, EA_BYREF);
             return;
+        }
+    }
+    else
+    {
+        if (src->OperIsInitVal())
+        {
+            src = src->gtGetOp1();
         }
     }
     genCopyRegIfNeeded(src, srcReg);
@@ -1537,6 +1545,11 @@ void CodeGen::genConsumeBlockOp(GenTreeBlk* blkNode, regNumber dstReg, regNumber
 //     None.
 void CodeGen::genProduceReg(GenTree* tree)
 {
+#ifdef DEBUG
+    assert((tree->gtDebugFlags & GTF_DEBUG_NODE_CG_PRODUCED) == 0);
+    tree->gtDebugFlags |= GTF_DEBUG_NODE_CG_PRODUCED;
+#endif
+
     if (tree->gtFlags & GTF_SPILL)
     {
         // Code for GT_COPY node gets generated as part of consuming regs by its parent.
@@ -1720,69 +1733,5 @@ void CodeGen::genEmitCall(int                   callType,
                                indir->Base() ? indir->Base()->gtRegNum : REG_NA,
                                indir->Index() ? indir->Index()->gtRegNum : REG_NA, indir->Scale(), indir->Offset());
 }
-
-/*****************************************************************************/
-#ifdef DEBUGGING_SUPPORT
-/*****************************************************************************
- *                          genSetScopeInfo
- *
- */
-//------------------------------------------------------------------------
-// genSetScopeInfo: Record scope information for debug info
-//
-// Arguments:
-//    which
-//    startOffs - the starting offset for this scope
-//    length    - the length of this scope
-//    varNum    - the lclVar for this scope info
-//    LVnum
-//    avail
-//    varLoc
-//
-// Notes:
-//    Called for every scope info piece to record by the main genSetScopeInfo()
-
-void CodeGen::genSetScopeInfo(unsigned            which,
-                              UNATIVE_OFFSET      startOffs,
-                              UNATIVE_OFFSET      length,
-                              unsigned            varNum,
-                              unsigned            LVnum,
-                              bool                avail,
-                              Compiler::siVarLoc& varLoc)
-{
-    // We need to do some mapping while reporting back these variables.
-
-    unsigned ilVarNum = compiler->compMap2ILvarNum(varNum);
-    noway_assert((int)ilVarNum != ICorDebugInfo::UNKNOWN_ILNUM);
-
-    VarName name = nullptr;
-
-#ifdef DEBUG
-
-    for (unsigned scopeNum = 0; scopeNum < compiler->info.compVarScopesCount; scopeNum++)
-    {
-        if (LVnum == compiler->info.compVarScopes[scopeNum].vsdLVnum)
-        {
-            name = compiler->info.compVarScopes[scopeNum].vsdName;
-        }
-    }
-
-    // Hang on to this compiler->info.
-
-    TrnslLocalVarInfo& tlvi = genTrnslLocalVarInfo[which];
-
-    tlvi.tlviVarNum    = ilVarNum;
-    tlvi.tlviLVnum     = LVnum;
-    tlvi.tlviName      = name;
-    tlvi.tlviStartPC   = startOffs;
-    tlvi.tlviLength    = length;
-    tlvi.tlviAvailable = avail;
-    tlvi.tlviVarLoc    = varLoc;
-
-#endif // DEBUG
-
-    compiler->eeSetLVinfo(which, startOffs, length, ilVarNum, LVnum, name, avail, varLoc);
-}
-#endif // DEBUGGING_SUPPORT
 
 #endif // !LEGACY_BACKEND

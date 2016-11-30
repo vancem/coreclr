@@ -49,11 +49,13 @@ PAL_wcsstr
 
 _wcsicmp
 _stricmp
-_snprintf
-_snwprintf
-_vsnwprintf
-_itow
-_i64tow
+sprintf_s
+swprintf_s
+_snwprintf_s
+_vsnprintf_s
+_vsnwprintf_s
+_itow_s
+_i64tow_s
 memcpy_s
 
 CoCreateGuid

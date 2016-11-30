@@ -1,4 +1,4 @@
-﻿// Licensed to the .NET Foundation under one or more agreements.
+// Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
@@ -82,6 +82,9 @@ namespace System.Globalization
         [NonSerialized]
         internal bool m_isInherited;
 
+        [NonSerialized]
+        private CultureInfo m_consoleFallbackCulture;
+
         // Names are confusing.  Here are 3 names we have:
         //
         //  new CultureInfo()   m_name        m_nonSortName   m_sortName
@@ -108,7 +111,6 @@ namespace System.Globalization
         // Otherwise its the sort name, ie: de-DE or de-DE_phoneb
         [NonSerialized]
         private string m_sortName;
-
 
         //--------------------------------------------------------------------//
         //
@@ -150,11 +152,12 @@ namespace System.Globalization
 
         // LOCALE constants of interest to us internally and privately for LCID functions
         // (ie: avoid using these and use names if possible)
-        private  const int LOCALE_NEUTRAL        = 0x0000;
+        internal const int LOCALE_NEUTRAL        = 0x0000;
         private  const int LOCALE_USER_DEFAULT   = 0x0400;
         private  const int LOCALE_SYSTEM_DEFAULT = 0x0800;
         internal const int LOCALE_CUSTOM_UNSPECIFIED = 0x1000;
-        internal const int LOCALE_CUSTOM_DEFAULT = 0x0c00;
+        internal const int LOCALE_CUSTOM_DEFAULT  = 0x0c00;
+        internal const int LOCALE_INVARIANT       = 0x007F;
 
         static AsyncLocal<CultureInfo> s_asyncLocalCurrentCulture; 
         static AsyncLocal<CultureInfo> s_asyncLocalCurrentUICulture;
@@ -205,7 +208,7 @@ namespace System.Globalization
         {
             if (name == null)
             {
-                throw new ArgumentNullException("name",
+                throw new ArgumentNullException(nameof(name),
                     SR.ArgumentNull_String);
             }
 
@@ -221,7 +224,7 @@ namespace System.Globalization
             // We don't check for other invalid LCIDS here...
             if (culture < 0)
             {
-                throw new ArgumentOutOfRangeException("culture", SR.ArgumentOutOfRange_NeedPosNum);
+                throw new ArgumentOutOfRangeException(nameof(culture), SR.ArgumentOutOfRange_NeedPosNum);
             }
             Contract.EndContractBlock();
 
@@ -239,7 +242,7 @@ namespace System.Globalization
                 case LOCALE_CUSTOM_UNSPECIFIED:
                     // Can't support unknown custom cultures and we do not support neutral or
                     // non-custom user locales.
-                    throw new CultureNotFoundException("culture", culture, SR.Argument_CultureNotSupported);
+                    throw new CultureNotFoundException(nameof(culture), culture, SR.Argument_CultureNotSupported);
 
                 default:
                     // Now see if this LCID is supported in the system default CultureData table.
@@ -257,7 +260,7 @@ namespace System.Globalization
 
             if (this.m_cultureData == null)
             {
-                throw new CultureNotFoundException("name", name, SR.Argument_CultureNotSupported);
+                throw new CultureNotFoundException(nameof(name), name, SR.Argument_CultureNotSupported);
             }
 
             this.m_name = this.m_cultureData.CultureName;
@@ -274,13 +277,13 @@ namespace System.Globalization
         {
             if (cultureName == null)
             {
-                throw new ArgumentNullException("cultureName",SR.ArgumentNull_String);
+                throw new ArgumentNullException(nameof(cultureName),SR.ArgumentNull_String);
             }
             Contract.EndContractBlock();
 
             m_cultureData = CultureData.GetCultureData(cultureName, false);
             if (m_cultureData == null)
-                throw new CultureNotFoundException("cultureName", cultureName, SR.Argument_CultureNotSupported);
+                throw new CultureNotFoundException(nameof(cultureName), cultureName, SR.Argument_CultureNotSupported);
             
             m_name = m_cultureData.CultureName;
 
@@ -312,6 +315,66 @@ namespace System.Globalization
             }
 
             return ci;
+        }
+
+        //
+        // Return a specific culture.  A tad irrelevent now since we always return valid data
+        // for neutral locales.
+        //
+        // Note that there's interesting behavior that tries to find a smaller name, ala RFC4647,
+        // if we can't find a bigger name.  That doesn't help with things like "zh" though, so
+        // the approach is of questionable value
+        //
+        public static CultureInfo CreateSpecificCulture(String name)
+        {
+            Contract.Ensures(Contract.Result<CultureInfo>() != null);
+
+            CultureInfo culture;
+
+            try
+            {
+                culture = new CultureInfo(name);
+            }
+            catch (ArgumentException)
+            {
+                // When CultureInfo throws this exception, it may be because someone passed the form
+                // like "az-az" because it came out of an http accept lang. We should try a little
+                // parsing to perhaps fall back to "az" here and use *it* to create the neutral.
+
+                int idx;
+
+                culture = null;
+                for (idx = 0; idx < name.Length; idx++)
+                {
+                    if ('-' == name[idx])
+                    {
+                        try
+                        {
+                            culture = new CultureInfo(name.Substring(0, idx));
+                            break;
+                        }
+                        catch (ArgumentException)
+                        {
+                            // throw the original exception so the name in the string will be right
+                            throw;
+                        }
+                    }
+                }
+
+                if (culture == null)
+                {
+                    // nothing to save here; throw the original exception
+                    throw;
+                }
+            }
+
+            // In the most common case, they've given us a specific culture, so we'll just return that.
+            if (!(culture.IsNeutralCulture))
+            {
+                return culture;
+            }
+
+            return (new CultureInfo(culture.m_cultureData.SSPECIFICCULTURE));
         }
 
         //        //
@@ -431,7 +494,7 @@ namespace System.Globalization
             {
                 if (value == null)
                 {
-                    throw new ArgumentNullException("value");
+                    throw new ArgumentNullException(nameof(value));
                 }
                 
                 if (s_asyncLocalCurrentCulture == null)
@@ -479,7 +542,7 @@ namespace System.Globalization
             {
                 if (value == null)
                 {
-                    throw new ArgumentNullException("value");
+                    throw new ArgumentNullException(nameof(value));
                 }
 
                 CultureInfo.VerifyCultureName(value, true);
@@ -491,6 +554,20 @@ namespace System.Globalization
 
                 // this one will set s_currentThreadUICulture too
                 s_asyncLocalCurrentUICulture.Value = value;               
+            }
+        }
+
+        public static CultureInfo InstalledUICulture
+        {
+            get
+            {
+                Contract.Ensures(Contract.Result<CultureInfo>() != null);
+                if (s_userDefaultCulture == null)
+                {
+                    Init();
+                }
+                Contract.Assert(s_userDefaultCulture != null, "[CultureInfo.InstalledUICulture] s_userDefaultCulture != null");
+                return s_userDefaultCulture;
             }
         }
 
@@ -596,6 +673,26 @@ namespace System.Globalization
             }
         }
 
+        public virtual int KeyboardLayoutId
+        {
+            get
+            {
+                return m_cultureData.IINPUTLANGUAGEHANDLE;
+            }
+        }
+
+        public static CultureInfo[] GetCultures(CultureTypes types)
+        {
+            Contract.Ensures(Contract.Result<CultureInfo[]>() != null);
+            // internally we treat UserCustomCultures as Supplementals but v2
+            // treats as Supplementals and Replacements
+            if((types & CultureTypes.UserCustomCulture) == CultureTypes.UserCustomCulture)
+            {
+                types |= CultureTypes.ReplacementCultures;
+            }
+            return (CultureData.GetCultures(types));
+        }
+
         ////////////////////////////////////////////////////////////////////////
         //
         //  Name
@@ -635,6 +732,24 @@ namespace System.Globalization
             }
         }
 
+        public string IetfLanguageTag
+        {
+            get
+            {
+                Contract.Ensures(Contract.Result<string>() != null);
+
+                // special case the compatibility cultures
+                switch (this.Name)
+                {
+                    case "zh-CHT":
+                        return "zh-Hant";
+                    case "zh-CHS":
+                        return "zh-Hans";
+                    default:
+                        return this.Name;
+                }
+            }
+        }
 
         ////////////////////////////////////////////////////////////////////////
         //
@@ -702,6 +817,32 @@ namespace System.Globalization
             }
         }
 
+        // ie: eng
+        public virtual String ThreeLetterISOLanguageName
+        {
+            get
+            {
+                Contract.Ensures(Contract.Result<String>() != null);
+                return m_cultureData.SISO639LANGNAME2;
+            }
+        }
+
+        ////////////////////////////////////////////////////////////////////////
+        //
+        //  ThreeLetterWindowsLanguageName
+        //
+        //  Returns the 3 letter windows language name for the current instance.  eg: "ENU"
+        //  The ISO names are much preferred
+        //
+        ////////////////////////////////////////////////////////////////////////
+        public virtual String ThreeLetterWindowsLanguageName
+        {
+            get
+            {
+                Contract.Ensures(Contract.Result<String>() != null);
+                return m_cultureData.SABBREVLANGNAME;
+            }
+        }
 
         ////////////////////////////////////////////////////////////////////////
         //
@@ -850,6 +991,31 @@ namespace System.Globalization
             }
         }
 
+        public CultureTypes CultureTypes
+        {
+            get
+            {
+                CultureTypes types = 0;
+
+                if (m_cultureData.IsNeutralCulture)
+                    types |= CultureTypes.NeutralCultures;
+                else
+                    types |= CultureTypes.SpecificCultures;
+
+                types |= m_cultureData.IsWin32Installed ? CultureTypes.InstalledWin32Cultures : 0;
+
+// Disable  warning 618: System.Globalization.CultureTypes.FrameworkCultures' is obsolete
+#pragma warning disable 618
+                types |= m_cultureData.IsFramework ? CultureTypes.FrameworkCultures : 0;
+
+#pragma warning restore 618
+                types |= m_cultureData.IsSupplementalCustomCulture ? CultureTypes.UserCustomCulture : 0;
+                types |= m_cultureData.IsReplacementCulture ? CultureTypes.ReplacementCultures | CultureTypes.UserCustomCulture : 0;
+
+                return types;
+            }
+        }
+
         public virtual NumberFormatInfo NumberFormat
         {
             get
@@ -858,7 +1024,7 @@ namespace System.Globalization
                 {
                     NumberFormatInfo temp = new NumberFormatInfo(this.m_cultureData);
                     temp.isReadOnly = m_isReadOnly;
-                    numInfo = temp;
+                    Interlocked.CompareExchange(ref numInfo, temp, null);
                 }
                 return (numInfo);
             }
@@ -866,7 +1032,7 @@ namespace System.Globalization
             {
                 if (value == null)
                 {
-                    throw new ArgumentNullException("value", SR.ArgumentNull_Obj);
+                    throw new ArgumentNullException(nameof(value), SR.ArgumentNull_Obj);
                 }
                 VerifyWritable();
                 numInfo = value;
@@ -890,8 +1056,7 @@ namespace System.Globalization
                     // Change the calendar of DTFI to the specified calendar of this CultureInfo.
                     DateTimeFormatInfo temp = new DateTimeFormatInfo(this.m_cultureData, this.Calendar);
                     temp._isReadOnly = m_isReadOnly;
-                    System.Threading.Interlocked.MemoryBarrier();
-                    dateTimeInfo = temp;
+                    Interlocked.CompareExchange(ref dateTimeInfo, temp, null);
                 }
                 return (dateTimeInfo);
             }
@@ -900,11 +1065,26 @@ namespace System.Globalization
             {
                 if (value == null)
                 {
-                    throw new ArgumentNullException("value", SR.ArgumentNull_Obj);
+                    throw new ArgumentNullException(nameof(value), SR.ArgumentNull_Obj);
                 }
                 VerifyWritable();
                 dateTimeInfo = value;
             }
+        }
+
+        public void ClearCachedData()
+        {
+            s_userDefaultCulture = null;
+
+            RegionInfo.s_currentRegionInfo = null;
+            #pragma warning disable 0618 // disable the obsolete warning 
+            TimeZone.ResetTimeZone();
+            #pragma warning restore 0618
+            TimeZoneInfo.ClearCachedData();
+            s_LcidCachedCultures = null;
+            s_NameCachedCultures = null;
+
+            CultureData.ClearCachedData();
         }
 
         /*=================================GetCalendarInstance==========================
@@ -1012,13 +1192,26 @@ namespace System.Globalization
             }
         }
 
-
-        private bool UseUserOverride
+        public bool UseUserOverride
         {
             get
             {
-                return (this.m_cultureData.UseUserOverride);
+                return m_cultureData.UseUserOverride;
             }
+        }
+
+        public CultureInfo GetConsoleFallbackUICulture()
+        {
+            Contract.Ensures(Contract.Result<CultureInfo>() != null);
+
+            CultureInfo temp = m_consoleFallbackCulture;
+            if (temp == null)
+            {
+                temp = CreateSpecificCulture(m_cultureData.SCONSOLEFALLBACKNAME);
+                temp.m_isReadOnly = true;
+                m_consoleFallbackCulture = temp;
+            }
+            return (temp);
         }
 
         public virtual Object Clone()
@@ -1062,7 +1255,7 @@ namespace System.Globalization
         {
             if (ci == null)
             {
-                throw new ArgumentNullException("ci");
+                throw new ArgumentNullException(nameof(ci));
             }
             Contract.Ensures(Contract.Result<CultureInfo>() != null);
             Contract.EndContractBlock();
@@ -1286,14 +1479,14 @@ namespace System.Globalization
             // Also check for zero as this would fail trying to add as a key to the hash.
             if (culture <= 0) 
             {
-                throw new ArgumentOutOfRangeException("culture", SR.ArgumentOutOfRange_NeedPosNum);
+                throw new ArgumentOutOfRangeException(nameof(culture), SR.ArgumentOutOfRange_NeedPosNum);
             }
             Contract.Ensures(Contract.Result<CultureInfo>() != null);
             Contract.EndContractBlock();
             CultureInfo retval = GetCultureInfoHelper(culture, null, null);
             if (null == retval)
             {
-                throw new CultureNotFoundException("culture", culture, SR.Argument_CultureNotSupported);
+                throw new CultureNotFoundException(nameof(culture), culture, SR.Argument_CultureNotSupported);
             }
             return retval;
         }
@@ -1305,16 +1498,65 @@ namespace System.Globalization
             // Make sure we have a valid, non-zero length string as name
             if (name == null)
             {
-                throw new ArgumentNullException("name");
+                throw new ArgumentNullException(nameof(name));
             }
 
             CultureInfo retval = GetCultureInfoHelper(0, name, null);
             if (retval == null)
             {
                 throw new CultureNotFoundException(
-                    "name", name, SR.Argument_CultureNotSupported);
+                    nameof(name), name, SR.Argument_CultureNotSupported);
             }
             return retval;
+        }
+
+        // Gets a cached copy of the specified culture from an internal hashtable (or creates it
+        // if not found).
+        public static CultureInfo GetCultureInfo(string name, string altName)
+        {
+            // Make sure we have a valid, non-zero length string as name
+            if (name == null)
+            {
+                throw new ArgumentNullException(nameof(name));
+            }
+
+            if (altName == null)
+            {
+                throw new ArgumentNullException(nameof(altName));
+            }
+            
+            Contract.Ensures(Contract.Result<CultureInfo>() != null);
+            Contract.EndContractBlock();
+
+            CultureInfo retval = GetCultureInfoHelper(-1, name, altName);
+            if (retval == null)
+            {
+                throw new CultureNotFoundException("name or altName",
+                                        SR.Format(SR.Argument_OneOfCulturesNotSupported, name, altName));
+            }
+            return retval;
+        }
+
+        // This function is deprecated, we don't like it
+        public static CultureInfo GetCultureInfoByIetfLanguageTag(string name)
+        {
+            Contract.Ensures(Contract.Result<CultureInfo>() != null);
+
+            // Disallow old zh-CHT/zh-CHS names
+            if (name == "zh-CHT" || name == "zh-CHS")
+            {
+                throw new CultureNotFoundException(nameof(name), SR.Format(SR.Argument_CultureIetfNotSupported, name));
+            }
+            
+            CultureInfo ci = GetCultureInfo(name);
+
+            // Disallow alt sorts and es-es_TS
+            if (ci.LCID > 0xffff || ci.LCID == 0x040a)
+            {
+                throw new CultureNotFoundException(nameof(name), SR.Format(SR.Argument_CultureIetfNotSupported, name));
+            }
+            
+            return ci;
         }
     }
 }

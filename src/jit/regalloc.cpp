@@ -2489,12 +2489,6 @@ regMaskTP Compiler::rpPredictTreeRegUse(GenTreePtr   tree,
         {
             case GT_ASG:
 
-                if (tree->OperIsBlkOp())
-                {
-                    interferingRegs |= rpPredictBlkAsgRegUse(tree, predictReg, lockedRegs, rsvdRegs);
-                    regMask = 0;
-                    goto RETURN_CHECK;
-                }
                 /* Is the value being assigned into a LCL_VAR? */
                 if (op1->gtOper == GT_LCL_VAR)
                 {
@@ -2559,6 +2553,12 @@ regMaskTP Compiler::rpPredictTreeRegUse(GenTreePtr   tree,
                             goto ASG_COMMON;
                         }
                     }
+                }
+                else if (tree->OperIsBlkOp())
+                {
+                    interferingRegs |= rpPredictBlkAsgRegUse(tree, predictReg, lockedRegs, rsvdRegs);
+                    regMask = 0;
+                    goto RETURN_CHECK;
                 }
                 __fallthrough;
 
@@ -4457,6 +4457,13 @@ regMaskTP Compiler::rpPredictTreeRegUse(GenTreePtr   tree,
 
             case GT_ARR_LENGTH:
                 goto GENERIC_UNARY;
+
+            case GT_INIT_VAL:
+                // This unary operator simply passes through the value from its child (much like GT_NOP)
+                // and thus won't need a scratch register.
+                regMask          = rpPredictTreeRegUse(op1, predictReg, lockedRegs, rsvdRegs);
+                tree->gtUsedRegs = op1->gtUsedRegs;
+                goto RETURN_CHECK;
 
             default:
 #ifdef DEBUG
@@ -6647,8 +6654,6 @@ void Compiler::raMarkStkVars()
 
 #endif // FEATURE_FIXED_OUT_ARGS
 
-#ifdef DEBUGGING_SUPPORT
-
 #ifdef DEBUG
             /* For debugging, note that we have to reserve space even for
                unused variables if they are ever in scope. However, this is not
@@ -6683,7 +6688,6 @@ void Compiler::raMarkStkVars()
                     varDsc->lvMustInit = true;
                 }
             }
-#endif // DEBUGGING_SUPPORT
 
 #ifndef LEGACY_BACKEND
             varDsc->lvOnFrame = needSlot;

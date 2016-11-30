@@ -134,6 +134,17 @@ inline TADDR PCODEToPINSTR(PCODE pc)
 #endif
 }
 
+// Convert from a PINSTR to the corresponding PCODE.  On many architectures this will be the identity function;
+// on ARM, this will raise the THUMB bit.
+inline PCODE PINSTRToPCODE(TADDR addr)
+{
+#ifdef _TARGET_ARM_
+    return DataPointerToThumbCode<PCODE,TADDR>(addr);
+#else
+    return dac_cast<PCODE>(addr);
+#endif
+}
+
 typedef LPCSTR  LPCUTF8;
 typedef LPSTR   LPUTF8;
 
@@ -5169,6 +5180,11 @@ template<class T> void DeleteExecutable(T *p)
 #endif // FEATURE_PAL
 
 INDEBUG(BOOL DbgIsExecutable(LPVOID lpMem, SIZE_T length);)
+
+BOOL NoGuiOnAssert();
+#ifdef _DEBUG
+VOID TerminateOnAssert();
+#endif // _DEBUG
 
 class HighCharHelper {
 public:

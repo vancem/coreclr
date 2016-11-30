@@ -249,7 +249,7 @@ namespace System
         internal ConfigNode Parse(String fileName, String configPath, bool skipSecurityStuff)
         {
             if (fileName == null)
-                throw new ArgumentNullException("fileName");
+                throw new ArgumentNullException(nameof(fileName));
             Contract.EndContractBlock();
             this.fileName = fileName;
             if (configPath[0] == '/'){
@@ -264,7 +264,7 @@ namespace System
             }
 
             if (!skipSecurityStuff) {
-                (new FileIOPermission( FileIOPermissionAccess.Read, System.IO.Path.GetFullPathInternal( fileName ) )).Demand();
+                (new FileIOPermission(FileIOPermissionAccess.Read, Path.GetFullPath(fileName))).Demand();
             }
 #pragma warning disable 618
             (new SecurityPermission(SecurityPermissionFlag.UnmanagedCode)).Assert();

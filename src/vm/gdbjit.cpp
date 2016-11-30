@@ -15,151 +15,255 @@
 #include "gdbjit.h"
 #include "gdbjithelpers.h"
 
-void GetTypeInfoFromSignature(PCCOR_SIGNATURE typePtr,
-                              unsigned typeLen,
-                              unsigned ilIndex,
-                              const char** typeStr,
-                              ULONG& typeSize,
-                              int& typeEncoding)
+TypeInfoBase*
+GetTypeInfoFromTypeHandle(TypeHandle typeHandle, NotifyGdb::PTK_TypeInfoMap pTypeMap)
 {
-    unsigned numArgs;
-    PCCOR_SIGNATURE typeEnd = typePtr + typeLen;
+    TypeInfoBase *typeInfo = nullptr;
+    TypeKey key = typeHandle.GetTypeKey();
+    PTR_MethodTable pMT = typeHandle.GetMethodTable();
 
-     // get the calling convention out
-    CorSigUncompressData(typePtr);
-
-    numArgs = CorSigUncompressData(typePtr);
-    int typ;
-    mdToken tk;
-    int i = 0;
-    while (typePtr < typeEnd)
+    if (pTypeMap->Lookup(&key, &typeInfo))
     {
-        if (i > ilIndex)
-            break;
-
-        SigParser sigTemp(typePtr);
-        sigTemp.PeekElemTypeSize(&typeSize);
-
-        switch (typ = *typePtr)
-        {
-            case ELEMENT_TYPE_VOID:
-                *typeStr = "void";
-                typeEncoding = DW_ATE_address;
-                break;
-            case ELEMENT_TYPE_BOOLEAN:
-                *typeStr = "bool";
-                typeEncoding = DW_ATE_boolean;
-                break;
-            case ELEMENT_TYPE_CHAR:
-                *typeStr = "char";
-                typeEncoding = DW_ATE_signed;
-                break;
-            case ELEMENT_TYPE_I1:
-                *typeStr = "int8";
-                typeEncoding = DW_ATE_signed;
-                break;
-            case ELEMENT_TYPE_U1:
-                *typeStr = "uint8";
-                typeEncoding = DW_ATE_unsigned;
-                break;
-            case ELEMENT_TYPE_I2:
-                *typeStr = "int16";
-                typeEncoding = DW_ATE_signed;
-                break;
-            case ELEMENT_TYPE_U2:
-                *typeStr = "uint16";
-                typeEncoding = DW_ATE_unsigned;
-                break;
-            case ELEMENT_TYPE_I4:
-                *typeStr = "int32";
-                typeEncoding = DW_ATE_signed;
-                break;
-            case ELEMENT_TYPE_U4:
-                *typeStr = "uint32";
-                typeEncoding = DW_ATE_unsigned;
-                break;
-            case ELEMENT_TYPE_I8:
-                *typeStr = "int64";
-                typeEncoding = DW_ATE_signed;
-                break;
-            case ELEMENT_TYPE_U8:
-                *typeStr = "uint64";
-                typeEncoding = DW_ATE_unsigned;
-                break;
-            case ELEMENT_TYPE_R4:
-                *typeStr = "float32";
-                typeEncoding = DW_ATE_float;
-                break;
-            case ELEMENT_TYPE_R8:
-                *typeStr = "float64";
-                typeEncoding = DW_ATE_float;
-                break;
-            case ELEMENT_TYPE_U:
-                *typeStr = "native uint";
-                typeEncoding = DW_ATE_unsigned;
-                break;
-            case ELEMENT_TYPE_I:
-                *typeStr = "native int";
-                typeEncoding = DW_ATE_signed;
-                break;
-            case ELEMENT_TYPE_CLASS:
-                *typeStr = "class";
-                typeEncoding = DW_ATE_address; // FIXME: Add DW_TAG_class_type
-                typePtr += CorSigUncompressToken(typePtr, &tk);
-                break;
-            case ELEMENT_TYPE_ARRAY:
-            case ELEMENT_TYPE_SZARRAY:
-                *typeStr = "array";
-                typeEncoding = DW_ATE_address; // FIXME: Add arr type
-                typePtr++;
-                break;
-            default:
-                *typeStr = "unknown";
-                typeEncoding = DW_ATE_address;
-        }
-        i++;
-        typePtr++;
+        return typeInfo;
     }
+
+    CorElementType corType = typeHandle.GetSignatureCorElementType();
+    switch (corType)
+    {
+        case ELEMENT_TYPE_VOID:
+        case ELEMENT_TYPE_BOOLEAN:
+        case ELEMENT_TYPE_CHAR:
+        case ELEMENT_TYPE_I1:
+        case ELEMENT_TYPE_U1:
+        case ELEMENT_TYPE_I2:
+        case ELEMENT_TYPE_U2:
+        case ELEMENT_TYPE_I4:
+        case ELEMENT_TYPE_U4:
+        case ELEMENT_TYPE_I8:
+        case ELEMENT_TYPE_U8:
+        case ELEMENT_TYPE_R4:
+        case ELEMENT_TYPE_R8:
+        case ELEMENT_TYPE_U:
+        case ELEMENT_TYPE_I:
+            typeInfo = new (nothrow) PrimitiveTypeInfo(typeHandle, CorElementTypeToDWEncoding[corType]);
+            if (typeInfo == nullptr)
+                return nullptr;
+
+            typeInfo->m_type_size = CorTypeInfo::Size(corType);
+
+            break;
+        case ELEMENT_TYPE_VALUETYPE:
+        case ELEMENT_TYPE_CLASS:
+        {
+            ApproxFieldDescIterator fieldDescIterator(pMT,
+                pMT->IsString() ? ApproxFieldDescIterator::INSTANCE_FIELDS : ApproxFieldDescIterator::ALL_FIELDS);
+            ULONG cFields = fieldDescIterator.Count();
+
+            typeInfo = new (nothrow) ClassTypeInfo(typeHandle, cFields);
+
+            if (typeInfo == nullptr)
+                return nullptr;
+
+            typeInfo->m_type_size = typeHandle.AsMethodTable()->GetClass()->GetSize();
+
+            RefTypeInfo* refTypeInfo = nullptr;
+            if (!typeHandle.IsValueType())
+            {
+                // name the type
+                refTypeInfo = new (nothrow) RefTypeInfo(typeHandle, typeInfo);
+                if (refTypeInfo == nullptr)
+                {
+                    return nullptr;
+                }
+                refTypeInfo->m_type_size = sizeof(TADDR);
+                refTypeInfo->m_value_type = typeInfo;
+                refTypeInfo->CalculateName();
+
+                pTypeMap->Add(refTypeInfo->GetTypeKey(), refTypeInfo);
+            }
+
+            pTypeMap->Add(typeInfo->GetTypeKey(), typeInfo);
+            typeInfo->CalculateName();
+
+            //
+            // Now fill in the array
+            //
+            FieldDesc *pField;
+
+            for (ULONG i = 0; i < cFields; i++)
+            {
+                pField = fieldDescIterator.Next();
+                ClassTypeInfo *info = static_cast<ClassTypeInfo*>(typeInfo);
+
+                LPCUTF8 szName = pField->GetName();
+                info->members[i].m_member_name = new char[strlen(szName) + 1];
+                strcpy(info->members[i].m_member_name, szName);
+                if (!pField->IsStatic())
+                {
+                    info->members[i].m_member_offset = (ULONG)pField->GetOffset();
+                    if (!typeHandle.IsValueType())
+                        info->members[i].m_member_offset += Object::GetOffsetOfFirstField();
+                }
+                else
+                {
+                    PTR_BYTE base = 0;
+                    MethodTable* pMT = pField->GetEnclosingMethodTable();
+                    base = pField->GetBase();
+
+                    // TODO: add support of generics with static fields
+                    if (pField->IsRVA() || !pMT->IsDynamicStatics())
+                    {
+                        PTR_VOID pAddress = pField->GetStaticAddressHandle((PTR_VOID)dac_cast<TADDR>(base));
+                        info->members[i].m_static_member_address = dac_cast<TADDR>(pAddress);
+                    }
+                }
+
+                info->members[i].m_member_type =
+                    GetTypeInfoFromTypeHandle(pField->GetExactFieldType(typeHandle), pTypeMap);
+
+                // handle the System.String case:
+                // coerce type of the second field into array type
+                if (pMT->IsString() && i == 1)
+                {
+                    TypeInfoBase* elemTypeInfo = info->members[1].m_member_type;
+                    TypeInfoBase* arrayTypeInfo = new (nothrow) ArrayTypeInfo(typeHandle.MakeSZArray(), 0, elemTypeInfo);
+                    if (arrayTypeInfo == nullptr)
+                        return nullptr;
+                    info->members[1].m_member_type = arrayTypeInfo;
+                }
+            }
+            if (refTypeInfo)
+                return refTypeInfo;
+            else
+                return typeInfo;
+        }
+        case ELEMENT_TYPE_PTR:
+        case ELEMENT_TYPE_BYREF:
+        {
+            TypeInfoBase* valTypeInfo = GetTypeInfoFromTypeHandle(typeHandle.GetTypeParam(), pTypeMap);
+            typeInfo = new (nothrow) RefTypeInfo(typeHandle, valTypeInfo);
+            if (typeInfo == nullptr)
+                return nullptr;
+            typeInfo->m_type_size = sizeof(TADDR);
+            typeInfo->m_type_offset = valTypeInfo->m_type_offset;
+            break;
+        }
+        case ELEMENT_TYPE_ARRAY:
+        case ELEMENT_TYPE_SZARRAY:
+        {
+            typeInfo = new (nothrow) ClassTypeInfo(typeHandle, 2);
+            if (typeInfo == nullptr)
+                return nullptr;
+            typeInfo->m_type_size = pMT->GetClass()->GetSize();
+
+            typeInfo->CalculateName();
+            RefTypeInfo *refTypeInfo = new (nothrow) RefTypeInfo(typeHandle, typeInfo);
+            if (refTypeInfo == nullptr)
+            {
+                return nullptr;
+            }
+            refTypeInfo->m_type_size = sizeof(TADDR);
+            refTypeInfo->m_value_type = typeInfo;
+            refTypeInfo->CalculateName();
+
+            pTypeMap->Add(refTypeInfo->GetTypeKey(), refTypeInfo);
+
+            TypeInfoBase* lengthTypeInfo = GetTypeInfoFromTypeHandle(
+                TypeHandle(MscorlibBinder::GetElementType(ELEMENT_TYPE_I4)), pTypeMap);
+
+            TypeInfoBase* valTypeInfo = GetTypeInfoFromTypeHandle(typeHandle.GetTypeParam(), pTypeMap);
+            TypeInfoBase* arrayTypeInfo = new (nothrow) ArrayTypeInfo(typeHandle, 0, valTypeInfo);
+            if (arrayTypeInfo == nullptr)
+                return nullptr;
+
+            ClassTypeInfo *info = static_cast<ClassTypeInfo*>(typeInfo);
+
+            info->members[0].m_member_name = new (nothrow) char[16];
+            strcpy(info->members[0].m_member_name, "m_NumComponents");
+            info->members[0].m_member_offset = ArrayBase::GetOffsetOfNumComponents();
+            info->members[0].m_member_type = lengthTypeInfo;
+            info->members[0].m_member_type->m_type_size = sizeof(DWORD);
+
+            info->members[1].m_member_name = new (nothrow) char[7];
+            strcpy(info->members[1].m_member_name, "m_Data");
+            info->members[1].m_member_offset = ArrayBase::GetDataPtrOffset(pMT);
+            info->members[1].m_member_type = arrayTypeInfo;
+            info->members[1].m_member_type->m_type_size = sizeof(TADDR);
+
+            return refTypeInfo;
+        }
+        default:
+            ASSERT(0 && "not implemented");
+            break;
+    }
+    // name the type
+    if (corType == ELEMENT_TYPE_CHAR)
+    {
+        typeInfo->m_type_name = new char[9];
+        strcpy(typeInfo->m_type_name, "char16_t");
+    }
+    else
+    {
+        typeInfo->CalculateName();
+    }
+    pTypeMap->Add(typeInfo->GetTypeKey(), typeInfo);
+    return typeInfo;
 }
 
-void GetArgTypeInfo(MethodDesc* MethodDescPtr,
-                    unsigned ilIndex,
-                    const char** typeStr,
-                    ULONG& typeSize,
-                    int& typeEncoding)
+TypeInfoBase* GetArgTypeInfo(MethodDesc* MethodDescPtr,
+                    NotifyGdb::PTK_TypeInfoMap pTypeMap,
+                    unsigned ilIndex)
 {
-    DWORD cbSigLen;
-    PCCOR_SIGNATURE pComSig;
-    MethodDescPtr->GetSig(&pComSig, &cbSigLen);
-    GetTypeInfoFromSignature(pComSig, cbSigLen, ilIndex, typeStr, typeSize, typeEncoding);
+    MetaSig sig(MethodDescPtr);
+    TypeHandle th;
+    if (ilIndex == 0)
+    {
+        th = sig.GetRetTypeHandleNT();
+    }
+    else
+    {
+        while (--ilIndex)
+            sig.SkipArg();
+
+        sig.NextArg();
+        th = sig.GetLastTypeHandleNT();
+    }
+    return GetTypeInfoFromTypeHandle(th, pTypeMap);
 }
 
-void GetLocalTypeInfo(MethodDesc *MethodDescPtr,
-                      unsigned ilIndex,
-                      const char** typeStr,
-                      ULONG& typeSize,
-                      int& typeEncoding)
+TypeInfoBase* GetLocalTypeInfo(MethodDesc *MethodDescPtr,
+                      NotifyGdb::PTK_TypeInfoMap pTypeMap,
+                      unsigned ilIndex)
 {
     COR_ILMETHOD_DECODER method(MethodDescPtr->GetILHeader());
     if (method.GetLocalVarSigTok())
     {
         DWORD cbSigLen;
         PCCOR_SIGNATURE pComSig;
-        CQuickBytes qbMemberSig;
-        size_t dwL;
 
         if (FAILED(MethodDescPtr->GetMDImport()->GetSigFromToken(method.GetLocalVarSigTok(), &cbSigLen, &pComSig)))
         {
             printf("\nInvalid record");
-            return;
+            return nullptr;
         }
 
         _ASSERTE(*pComSig == IMAGE_CEE_CS_CALLCONV_LOCAL_SIG);
-        GetTypeInfoFromSignature(pComSig, cbSigLen, ilIndex, typeStr, typeSize, typeEncoding);
+
+        SigTypeContext typeContext(MethodDescPtr, TypeHandle());
+        MetaSig sig(pComSig, cbSigLen, MethodDescPtr->GetModule(), &typeContext, MetaSig::sigLocalVars);
+        if (ilIndex > 0)
+        {
+            while (ilIndex--)
+                sig.SkipArg();
+        }
+        sig.NextArg();
+        TypeHandle th = sig.GetLastTypeHandleNT();
+        return GetTypeInfoFromTypeHandle(th, pTypeMap);
     }
+    return nullptr;
 }
 
-HRESULT GetArgNameByILIndex(MethodDesc* MethodDescPtr, unsigned index, LPCSTR &paramName)
+HRESULT GetArgNameByILIndex(MethodDesc* MethodDescPtr, unsigned index, LPSTR &paramName)
 {
     IMDInternalImport* mdImport = MethodDescPtr->GetMDImport();
     mdParamDef paramToken;
@@ -170,16 +274,18 @@ HRESULT GetArgNameByILIndex(MethodDesc* MethodDescPtr, unsigned index, LPCSTR &p
     // Param indexing is 1-based.
     ULONG32 mdIndex = index + 1;
 
-    MetaSig* sig = new MetaSig(MethodDescPtr);
-    if (sig->HasThis())
+    MetaSig sig(MethodDescPtr);
+    if (sig.HasThis())
     {
         mdIndex--;
     }
-    delete sig;
     status = mdImport->FindParamOfMethod(MethodDescPtr->GetMemberDef(), mdIndex, &paramToken);
     if (status == S_OK)
     {
-        status = mdImport->GetParamDefProps(paramToken, &seq, &attr, &paramName);
+        LPCSTR name;
+        status = mdImport->GetParamDefProps(paramToken, &seq, &attr, &name);
+        paramName = new char[strlen(name) + 1];
+        strcpy(paramName, name);
     }
     return status;
 }
@@ -286,36 +392,28 @@ GetMethodNativeMap(MethodDesc* methodDesc,
     return S_OK;
 }
 
-HRESULT GetLocalsDebugInfo(MethodDesc* MethodDescPtr,
+HRESULT FunctionMember::GetLocalsDebugInfo(NotifyGdb::PTK_TypeInfoMap pTypeMap,
                            LocalsInfo& locals,
-                           NewArrayHolder<LocalsDebugInfo>& localsDebug,
-                           int localsDebugSize,
-                           NewArrayHolder<ArgsDebugInfo>& argsDebug,
-                           int nArgsCount,
                            int startNativeOffset)
 {
 
     ICorDebugInfo::NativeVarInfo* nativeVar = NULL;
-
     int thisOffs = 0;
-    ULONG typeSize = 0;
-    int typeEncoding = 0;
-    const char* typeStr;
-    if (!MethodDescPtr->IsStatic())
-        thisOffs = 1;
-
-    for (int i = 0; i < nArgsCount - thisOffs; i++)
+    if (!md->IsStatic())
     {
-        if (FindNativeInfoInILVariable(i + thisOffs, startNativeOffset, &locals.pVars, locals.countVars, &nativeVar) ==
-            S_OK)
+        thisOffs = 1;
+    }
+
+    int i;
+    for (i = 0; i < m_num_args - thisOffs; i++)
+    {
+        if (FindNativeInfoInILVariable(i + thisOffs, startNativeOffset, &locals.pVars, locals.countVars, &nativeVar) == S_OK)
         {
-            GetArgTypeInfo(MethodDescPtr, i + 1, &typeStr, typeSize, typeEncoding);
-            argsDebug[i + thisOffs].m_type_encoding = typeEncoding;
-            argsDebug[i + thisOffs].m_type_name = typeStr;
-            GetArgNameByILIndex(MethodDescPtr, i + thisOffs, argsDebug[i + thisOffs].m_arg_name);
-            argsDebug[i + thisOffs].m_type_size = typeSize;
-            argsDebug[i + thisOffs].m_il_index = i;
-            argsDebug[i + thisOffs].m_native_offset = nativeVar->loc.vlStk.vlsOffset;
+            vars[i + thisOffs].m_var_type = GetArgTypeInfo(md, pTypeMap, i + 1);
+            GetArgNameByILIndex(md, i + thisOffs, vars[i + thisOffs].m_var_name);
+            vars[i + thisOffs].m_il_index = i;
+            vars[i + thisOffs].m_native_offset = nativeVar->loc.vlStk.vlsOffset;
+            vars[i + thisOffs].m_var_abbrev = 6;
         }
     }
     //Add info about 'this' as first argument
@@ -323,28 +421,26 @@ HRESULT GetLocalsDebugInfo(MethodDesc* MethodDescPtr,
     {
         if (FindNativeInfoInILVariable(0, startNativeOffset, &locals.pVars, locals.countVars, &nativeVar) == S_OK)
         {
-            argsDebug[0].m_type_encoding = DW_ATE_address;
-            argsDebug[0].m_type_name = "this";
-            argsDebug[0].m_arg_name = "this";
-            argsDebug[0].m_type_size = sizeof(TADDR);
-            argsDebug[0].m_il_index = 0;
-            argsDebug[0].m_native_offset = nativeVar->loc.vlStk.vlsOffset;
-        }
+            vars[0].m_var_type = GetTypeInfoFromTypeHandle(TypeHandle(md->GetMethodTable()), pTypeMap);
+            vars[0].m_var_name = new char[strlen("this") + 1];
+            strcpy(vars[0].m_var_name, "this");
+            vars[0].m_il_index = 0;
+            vars[0].m_native_offset = nativeVar->loc.vlStk.vlsOffset;
+            vars[0].m_var_abbrev = 13;
+         }
+         i++;
     }
-
-
-    for (int i = 0; i < localsDebugSize; i++)
+    for (; i < m_num_vars; i++)
     {
         if (FindNativeInfoInILVariable(
-                i + nArgsCount, startNativeOffset, &locals.pVars, locals.countVars, &nativeVar) == S_OK)
+                i, startNativeOffset, &locals.pVars, locals.countVars, &nativeVar) == S_OK)
         {
-            GetLocalTypeInfo(MethodDescPtr, i, &typeStr, typeSize, typeEncoding);
-            localsDebug[i].m_type_encoding = typeEncoding;
-            localsDebug[i].m_type_name = typeStr;
-            localsDebug[i].m_var_name = locals.localsName[i];
-            localsDebug[i].m_type_size = typeSize;
-            localsDebug[i].m_il_index = i;
-            localsDebug[i].m_native_offset = nativeVar->loc.vlStk.vlsOffset;
+            vars[i].m_var_type = GetLocalTypeInfo(md, pTypeMap, i - m_num_args);
+            vars[i].m_var_name = new char[strlen(locals.localsName[i - m_num_args]) + 1];
+            strcpy(vars[i].m_var_name, locals.localsName[i - m_num_args]);
+            vars[i].m_il_index = i - m_num_args;
+            vars[i].m_native_offset = nativeVar->loc.vlStk.vlsOffset;
+            vars[i].m_var_abbrev = 5;
         }
     }
     return S_OK;
@@ -371,58 +467,123 @@ GetDebugInfoFromPDB(MethodDesc* MethodDescPtr, SymbolsInfo** symInfo, unsigned i
     StackScratchBuffer scratch;
     const char* szModName = modName.GetUTF8(scratch);
 
-    MethodDebugInfo* methodDebugInfo = new (nothrow) MethodDebugInfo();
-    if (methodDebugInfo == nullptr)
+    MethodDebugInfo methodDebugInfo;
+
+    methodDebugInfo.points = (SequencePointInfo*) CoTaskMemAlloc(sizeof(SequencePointInfo) * numMap);
+    if (methodDebugInfo.points == nullptr)
         return E_OUTOFMEMORY;
 
-    methodDebugInfo->points = (SequencePointInfo*) CoTaskMemAlloc(sizeof(SequencePointInfo) * numMap);
-    if (methodDebugInfo->points == nullptr)
-        return E_OUTOFMEMORY;
+    methodDebugInfo.size = numMap;
 
-    methodDebugInfo->size = numMap;
-
-    if (getInfoForMethodDelegate(szModName, MethodDescPtr->GetMemberDef(), *methodDebugInfo) == FALSE)
+    if (getInfoForMethodDelegate(szModName, MethodDescPtr->GetMemberDef(), methodDebugInfo) == FALSE)
         return E_FAIL;
 
-    symInfoLen = methodDebugInfo->size;
-    *symInfo = new (nothrow) SymbolsInfo[symInfoLen];
+    symInfoLen = numMap;
+    *symInfo = new (nothrow) SymbolsInfo[numMap];
     if (*symInfo == nullptr)
         return E_FAIL;
-    locals.size = methodDebugInfo->localsSize;
+    locals.size = methodDebugInfo.localsSize;
     locals.localsName = new (nothrow) char *[locals.size];
     if (locals.localsName == nullptr)
         return E_FAIL;
 
     for (ULONG32 i = 0; i < locals.size; i++)
     {
-        size_t sizeRequired = WideCharToMultiByte(CP_UTF8, 0, methodDebugInfo->locals[i], -1, NULL, 0, NULL, NULL);
+        size_t sizeRequired = WideCharToMultiByte(CP_UTF8, 0, methodDebugInfo.locals[i], -1, NULL, 0, NULL, NULL);
         locals.localsName[i] = new (nothrow) char[sizeRequired];
 
         int len = WideCharToMultiByte(
-            CP_UTF8, 0, methodDebugInfo->locals[i], -1, locals.localsName[i], sizeRequired, NULL, NULL);
+            CP_UTF8, 0, methodDebugInfo.locals[i], -1, locals.localsName[i], sizeRequired, NULL, NULL);
     }
 
-    for (ULONG32 i = 0; i < symInfoLen; i++)
+    for (ULONG32 j = 0; j < numMap; j++)
     {
-        for (ULONG32 j = 0; j < numMap; j++)
-        {
-            if (methodDebugInfo->points[i].ilOffset == map[j].ilOffset)
-            {
-                SymbolsInfo& s = (*symInfo)[i];
-                const SequencePointInfo& sp = methodDebugInfo->points[i];
+        SymbolsInfo& s = (*symInfo)[j];
 
-                s.nativeOffset = map[j].nativeStartOffset;
-                s.ilOffset = map[j].ilOffset;
+        if (j == 0) {
+            s.fileName[0] = 0;
+            s.lineNumber = 0;
+            s.fileIndex = 0;
+        } else {
+            s = (*symInfo)[j - 1];
+        }
+        s.nativeOffset = map[j].nativeStartOffset;
+        s.ilOffset = map[j].ilOffset;
+        s.source = map[j].source;
+        s.lineNumber = 0;
+
+        for (ULONG32 i = 0; i < methodDebugInfo.size; i++)
+        {
+            const SequencePointInfo& sp = methodDebugInfo.points[i];
+
+            if (methodDebugInfo.points[i].ilOffset == map[j].ilOffset)
+            {
                 s.fileIndex = 0;
                 int len = WideCharToMultiByte(CP_UTF8, 0, sp.fileName, -1, s.fileName, sizeof(s.fileName), NULL, NULL);
                 s.fileName[len] = 0;
                 s.lineNumber = sp.lineNumber;
+                break;
             }
         }
     }
 
-    CoTaskMemFree(methodDebugInfo->points);
+    CoTaskMemFree(methodDebugInfo.points);
     return S_OK;
+}
+
+/* LEB128 for 32-bit unsigned integer */
+int Leb128Encode(uint32_t num, char* buf, int size)
+{
+    int i = 0;
+    
+    do
+    {
+        uint8_t byte = num & 0x7F;
+        if (i >= size)
+            break;
+        num >>= 7;
+        if (num != 0)
+            byte |= 0x80;
+        buf[i++] = byte;
+    }
+    while (num != 0);
+    
+    return i;
+}
+
+/* LEB128 for 32-bit signed integer */
+int Leb128Encode(int32_t num, char* buf, int size)
+{
+    int i = 0;
+    bool hasMore = true, isNegative = num < 0;
+    
+    while (hasMore && i < size)
+    {
+        uint8_t byte = num & 0x7F;
+        num >>= 7;
+        
+        if ((num == 0 && (byte & 0x40) == 0) || (num  == -1 && (byte & 0x40) == 0x40))
+            hasMore = false;
+        else
+            byte |= 0x80;
+        buf[i++] = byte;
+    }
+    
+    return i;
+}
+
+int GetFrameLocation(int nativeOffset, char* bufVarLoc)
+{
+    char cnvBuf[16] = {0};
+    int len = Leb128Encode(static_cast<int32_t>(nativeOffset), cnvBuf, sizeof(cnvBuf));
+    bufVarLoc[0] = len + 1;
+    bufVarLoc[1] = DW_OP_fbreg;
+    for (int j = 0; j < len; j++)
+    {
+        bufVarLoc[j + 2] = cnvBuf[j];
+    }
+
+    return len + 2;  // We add '2' because first 2 bytes contain length of expression and DW_OP_fbreg operation.
 }
 
 // GDB JIT interface
@@ -463,11 +624,24 @@ struct jit_descriptor __jit_debug_descriptor = { 1, 0, 0, 0 };
 
 /* Predefined section names */
 const char* SectionNames[] = {
-    "", ".text", ".shstrtab", ".debug_str", ".debug_abbrev", ".debug_info",
-    ".debug_pubnames", ".debug_pubtypes", ".debug_line", ".symtab", ".strtab", ".thunks", ""
+    "",
+    ".text",
+    ".shstrtab",
+    ".debug_str",
+    ".debug_abbrev",
+    ".debug_info",
+    ".debug_pubnames",
+    ".debug_pubtypes",
+    ".debug_line",
+    ".symtab",
+    ".strtab"
+    /* After the last (.strtab) section zero or more .thunk_* sections are generated.
+
+       Each .thunk_* section contains a single .thunk_#.
+       These symbols are mapped to methods (or trampolines) called by currently compiled method. */
 };
 
-const int SectionNamesCount = sizeof(SectionNames) / sizeof(SectionNames[0]);
+const int SectionNamesCount = sizeof(SectionNames) / sizeof(SectionNames[0]); // Does not include .thunk_* sections
 
 /* Static data for section headers */
 struct SectionHeader {
@@ -490,7 +664,7 @@ struct SectionHeader {
 
 /* Static data for .debug_str section */
 const char* DebugStrings[] = {
-  "CoreCLR", "" /* module name */, "" /* module path */, "" /* method name */
+  "CoreCLR", "" /* module name */, "" /* module path */
 };
 
 const int DebugStringCount = sizeof(DebugStrings) / sizeof(DebugStrings[0]);
@@ -528,6 +702,45 @@ const unsigned char AbbrevTable[] = {
     6, DW_TAG_formal_parameter, DW_CHILDREN_no,
         DW_AT_name, DW_FORM_strp, DW_AT_decl_file, DW_FORM_data1, DW_AT_decl_line, DW_FORM_data1, DW_AT_type,
         DW_FORM_ref4, DW_AT_location, DW_FORM_exprloc, 0, 0,
+
+    7, DW_TAG_class_type, DW_CHILDREN_yes,
+        DW_AT_name, DW_FORM_strp, DW_AT_byte_size, DW_FORM_data1, 0, 0,
+
+    8, DW_TAG_member, DW_CHILDREN_no,
+        DW_AT_name, DW_FORM_strp, DW_AT_type, DW_FORM_ref4, DW_AT_data_member_location, DW_FORM_data4, 0, 0,
+
+    9, DW_TAG_pointer_type, DW_CHILDREN_no,
+        DW_AT_type, DW_FORM_ref4, DW_AT_byte_size, DW_FORM_data1, 0, 0,
+
+    10, DW_TAG_array_type, DW_CHILDREN_yes,
+        DW_AT_type, DW_FORM_ref4, 0, 0,
+
+    11, DW_TAG_subrange_type, DW_CHILDREN_no,
+        DW_AT_upper_bound, DW_FORM_exprloc, 0, 0,
+
+    12, DW_TAG_subprogram, DW_CHILDREN_yes,
+        DW_AT_name, DW_FORM_strp, DW_AT_decl_file, DW_FORM_data1, DW_AT_decl_line, DW_FORM_data1,
+        DW_AT_type, DW_FORM_ref4, DW_AT_external, DW_FORM_flag_present,
+        DW_AT_low_pc, DW_FORM_addr, DW_AT_high_pc, 
+#if defined(_TARGET_AMD64_)
+        DW_FORM_data8,
+#elif defined(_TARGET_ARM_)
+        DW_FORM_data4,
+#else
+#error Unsupported platform!
+#endif
+        DW_AT_frame_base, DW_FORM_exprloc, DW_AT_object_pointer, DW_FORM_ref4, 0, 0,
+
+    13, DW_TAG_formal_parameter, DW_CHILDREN_no,
+        DW_AT_name, DW_FORM_strp, DW_AT_decl_file, DW_FORM_data1, DW_AT_decl_line, DW_FORM_data1, DW_AT_type,
+        DW_FORM_ref4, DW_AT_location, DW_FORM_exprloc, DW_AT_artificial, DW_FORM_flag_present, 0, 0,
+
+    14, DW_TAG_member, DW_CHILDREN_no,
+        DW_AT_name, DW_FORM_strp, DW_AT_type, DW_FORM_ref4, DW_AT_external, DW_FORM_flag_present, 0, 0,
+
+    15, DW_TAG_variable, DW_CHILDREN_no, DW_AT_specification, DW_FORM_ref4, DW_AT_location, DW_FORM_exprloc,
+        0, 0,
+
     0
 };
 
@@ -568,19 +781,66 @@ struct __attribute__((packed)) DebugInfoSub
 #error Unsupported platform!
 #endif
     uint8_t m_sub_loc[2];
-} debugInfoSub = {
-    4, 0, 1, 1, 0x1a, 0, 0, {1,
-#if defined(_TARGET_AMD64_)
-        DW_OP_reg6
-#elif defined(_TARGET_ARM_)
-        DW_OP_reg11
-#else
-#error Unsupported platform!
-#endif
-    },
 };
 
+struct __attribute__((packed)) DebugInfoSubMember
+{
+    DebugInfoSub sub;
+    uint32_t m_obj_ptr;
+};
 
+// Holder for array of pointers to FunctionMember objects
+class FunctionMemberPtrArrayHolder : public NewArrayHolder<FunctionMember*>
+{
+private:
+    int m_cElements;
+
+    void DeleteElements()
+    {
+        for (int i = 0; i < m_cElements; i++)
+        {
+            delete this->m_value[i];
+        }
+    }
+
+public:
+    FunctionMemberPtrArrayHolder() :
+        NewArrayHolder<FunctionMember*>(),
+        m_cElements(0)
+    {
+    }
+
+    bool Alloc(int cElements)
+    {
+        FunctionMember** value = new (nothrow) FunctionMember*[cElements];
+        if (value == nullptr)
+            return false;
+
+        for (int i = 0; i < cElements; i++)
+        {
+            value[i] = nullptr;
+        }
+
+        // Clean previous elements
+        DeleteElements();
+
+        NewArrayHolder<FunctionMember*>::operator=(value);
+        m_cElements = cElements;
+        return true;
+    }
+
+    int GetCount() const
+    {
+        return m_cElements;
+    }
+
+    ~FunctionMemberPtrArrayHolder()
+    {
+        DeleteElements();
+    }
+};
+
+static FunctionMemberPtrArrayHolder method;
 
 struct __attribute__((packed)) DebugInfoType
 {
@@ -590,8 +850,6 @@ struct __attribute__((packed)) DebugInfoType
     uint8_t m_byte_size;
 };
 
-DebugInfoType retType;
-
 struct __attribute__((packed)) DebugInfoVar
 {
     uint8_t m_var_abbrev;
@@ -600,18 +858,468 @@ struct __attribute__((packed)) DebugInfoVar
     uint32_t m_var_type;
 };
 
+struct __attribute__((packed)) DebugInfoClassType
+{
+    uint8_t m_type_abbrev;
+    uint32_t m_type_name;
+    uint8_t m_byte_size;
+};
+
+struct __attribute__((packed)) DebugInfoClassMember
+{
+    uint8_t m_member_abbrev;
+    uint32_t m_member_name;
+    uint32_t m_member_type;
+};
+
+struct __attribute__((packed)) DebugInfoStaticMember
+{
+    uint8_t m_member_abbrev;
+    uint32_t m_member_specification;
+};
+
+
+struct __attribute__((packed)) DebugInfoRefType
+{
+    uint8_t m_type_abbrev;
+    uint32_t m_ref_type;
+    uint8_t m_byte_size;
+};
+
+struct __attribute__((packed)) DebugInfoArrayType
+{
+    uint8_t m_abbrev;
+    uint32_t m_type;
+};
+
+void TypeInfoBase::DumpStrings(char* ptr, int& offset)
+{
+    if (ptr != nullptr)
+    {
+        strcpy(ptr + offset, m_type_name);
+        m_type_name_offset = offset;
+    }
+    offset += strlen(m_type_name) + 1;
+}
+
+void TypeInfoBase::CalculateName() 
+{
+    // name the type
+    SString sName;
+    typeHandle.GetName(sName);
+    StackScratchBuffer buffer;
+    const UTF8 *utf8 = sName.GetUTF8(buffer);
+    m_type_name = new char[strlen(utf8) + 1];
+    strcpy(m_type_name, utf8);
+}
+
+void TypeInfoBase::SetTypeHandle(TypeHandle handle)
+{
+    typeHandle = handle;
+    typeKey = handle.GetTypeKey();
+}
+
+TypeHandle TypeInfoBase::GetTypeHandle()
+{
+    return typeHandle;
+}
+
+TypeKey* TypeInfoBase::GetTypeKey()
+{
+    return &typeKey;
+}
+
+void PrimitiveTypeInfo::DumpDebugInfo(char* ptr, int& offset)
+{
+    if (m_type_offset != 0)
+    {
+        return;
+    }
+
+    if (ptr != nullptr)
+    {
+        DebugInfoType bufType;
+        bufType.m_type_abbrev = 2;
+        bufType.m_type_name = m_type_name_offset;
+        bufType.m_encoding = m_type_encoding;
+        bufType.m_byte_size = m_type_size;
+
+        memcpy(ptr + offset,
+               &bufType,
+               sizeof(DebugInfoType));
+        m_type_offset = offset;
+    }
+
+    offset += sizeof(DebugInfoType);
+}
+
+ClassTypeInfo::ClassTypeInfo(TypeHandle typeHandle, int num_members)
+        : TypeInfoBase(typeHandle),
+          m_num_members(num_members),
+          members(new TypeMember[num_members])
+{
+}
+
+ClassTypeInfo::~ClassTypeInfo()
+{
+    if (members != nullptr && m_num_members > 0)
+    {
+        delete[] members;
+    }
+}
+
+void TypeMember::DumpStrings(char* ptr, int& offset)
+{
+    if (ptr != nullptr)
+    {
+        strcpy(ptr + offset, m_member_name);
+        m_member_name_offset = offset;
+    }
+    offset += strlen(m_member_name) + 1;
+}
+
+void TypeMember::DumpDebugInfo(char* ptr, int& offset)
+{
+    if (ptr != nullptr)
+    {
+        DebugInfoClassMember memberEntry;
+
+        if (m_static_member_address == 0)
+            memberEntry.m_member_abbrev = 8;
+        else
+        {
+            memberEntry.m_member_abbrev = 14;
+            m_member_offset = offset;
+        }
+        memberEntry.m_member_name = m_member_name_offset;
+        memberEntry.m_member_type = m_member_type->m_type_offset;
+
+        memcpy(ptr + offset, &memberEntry, sizeof(DebugInfoClassMember));
+        if (m_static_member_address == 0)
+            memcpy(ptr + offset + sizeof(DebugInfoClassMember), &m_member_offset, sizeof(m_member_offset));
+    }
+    offset += sizeof(DebugInfoClassMember);
+    if (m_static_member_address == 0)
+        offset += sizeof(m_member_offset);
+}
+
+void TypeMember::DumpStaticDebugInfo(char* ptr, int& offset)
+{
+    const int ptrSize = sizeof(TADDR);
+    if (ptr != nullptr)
+    {
+        DebugInfoStaticMember memberEntry;
+
+        memberEntry.m_member_abbrev = 15;
+        memberEntry.m_member_specification = m_member_offset;
+        memcpy(ptr + offset, &memberEntry, sizeof(DebugInfoStaticMember));
+
+        char buf[ptrSize + 2] = {0};
+        buf[0] = ptrSize + 1;
+        buf[1] = DW_OP_addr;
+
+        for (int i = 0; i < ptrSize; i++)
+        {
+            buf[i + 2] = m_static_member_address >> (i * 8);
+        }
+
+        memcpy(ptr + offset + sizeof(DebugInfoStaticMember), &buf, ptrSize + 2);
+    }
+    offset += sizeof(DebugInfoStaticMember);
+    offset += ptrSize + 2;
+}
+
+
+void FunctionMember::DumpStrings(char* ptr, int& offset)
+{
+    TypeMember::DumpStrings(ptr, offset);
+
+    for (int i = 0; i < m_num_vars; ++i)
+    {
+        vars[i].DumpStrings(ptr, offset);
+    } 
+}
+
+void FunctionMember::DumpDebugInfo(char* ptr, int& offset)
+{
+    if (ptr != nullptr)
+    {
+        DebugInfoSub subEntry;
+
+        subEntry.m_sub_abbrev = 4;
+        subEntry.m_sub_name = m_member_name_offset;
+        subEntry.m_file = m_file;
+        subEntry.m_line = m_line;
+        subEntry.m_sub_type = m_member_type->m_type_offset;
+        subEntry.m_sub_low_pc = m_sub_low_pc;
+        subEntry.m_sub_high_pc = m_sub_high_pc;
+        subEntry.m_sub_loc[0] = m_sub_loc[0];
+        subEntry.m_sub_loc[1] = m_sub_loc[1];
+
+        if (!md->IsStatic())
+        {
+            DebugInfoSubMember subMemberEntry;
+            subEntry.m_sub_abbrev = 12;
+            subMemberEntry.sub = subEntry;
+            subMemberEntry.m_obj_ptr = offset+sizeof(DebugInfoSubMember);
+            memcpy(ptr + offset, &subMemberEntry, sizeof(DebugInfoSubMember));
+        }
+        else
+        {
+            memcpy(ptr + offset, &subEntry, sizeof(DebugInfoSub));
+        }
+        m_entry_offset = offset;
+        dumped = true;
+    }
+
+    if (!md->IsStatic())
+    {
+        offset += sizeof(DebugInfoSubMember);
+    }
+    else
+    {
+        offset += sizeof(DebugInfoSub);
+    }
+    for (int i = 0; i < m_num_vars; ++i)
+    {
+        vars[i].DumpDebugInfo(ptr, offset);
+    }
+
+    // terminate children
+    if (ptr != nullptr)
+    {
+        ptr[offset] = 0;
+    }
+    offset++;
+}
+
+int FunctionMember::GetArgsAndLocalsLen()
+{
+    int locSize = 0;
+    char tmpBuf[16];
+
+    // Format for DWARF location expression: [expression length][operation][offset in SLEB128 encoding]
+    for (int i = 0; i < m_num_vars; i++)
+    {
+        locSize += 2; // First byte contains expression length, second byte contains operation (DW_OP_fbreg).
+        locSize += Leb128Encode(static_cast<int32_t>(vars[i].m_native_offset), tmpBuf, sizeof(tmpBuf));
+    }
+    return locSize;
+}
+
+void ClassTypeInfo::DumpStrings(char* ptr, int& offset)
+{
+    TypeInfoBase::DumpStrings(ptr, offset);
+
+    for (int i = 0; i < m_num_members; ++i)
+    {
+        members[i].DumpStrings(ptr, offset);
+    }
+}
+
+void RefTypeInfo::DumpStrings(char* ptr, int& offset)
+{
+    TypeInfoBase::DumpStrings(ptr, offset);
+    m_value_type->DumpStrings(ptr, offset);
+}
+
+void RefTypeInfo::DumpDebugInfo(char* ptr, int& offset)
+{
+    if (m_type_offset != 0)
+    {
+        return;
+    }
+    m_type_offset = offset;
+    offset += sizeof(DebugInfoRefType);
+    m_value_type->DumpDebugInfo(ptr, offset);
+    if (ptr != nullptr)
+    {
+        DebugInfoRefType refType;
+        refType.m_type_abbrev = 9;
+        refType.m_ref_type = m_value_type->m_type_offset;
+        refType.m_byte_size = m_type_size;
+        memcpy(ptr + m_type_offset, &refType, sizeof(DebugInfoRefType));
+    }
+    else
+    {
+        m_type_offset = 0;
+    }
+}
+void ClassTypeInfo::DumpDebugInfo(char* ptr, int& offset)
+{
+    if (m_type_offset != 0)
+    {
+        return;
+    }
+    // make sure that types of all members are dumped
+    for (int i = 0; i < m_num_members; ++i)
+    {
+        if (members[i].m_member_type->m_type_offset == 0 && members[i].m_member_type != this)
+        {
+            members[i].m_member_type->DumpDebugInfo(ptr, offset);
+        }
+    }
+
+    if (ptr != nullptr)
+    {
+        DebugInfoClassType bufType;
+        bufType.m_type_abbrev = 7;
+        bufType.m_type_name = m_type_name_offset;
+        bufType.m_byte_size = m_type_size;
+
+        memcpy(ptr + offset, &bufType, sizeof(DebugInfoClassType));
+        m_type_offset = offset;
+    }
+    offset += sizeof(DebugInfoClassType);
+
+    for (int i = 0; i < m_num_members; ++i)
+    {
+        members[i].DumpDebugInfo(ptr, offset);
+    }
+
+    for (int i = 0; i < method.GetCount(); ++i)
+    {
+        if (method[i]->md->GetMethodTable() == GetTypeHandle().GetMethodTable())
+        {
+            // our method is part of this class, we should dump it now before terminating members
+            method[i]->DumpDebugInfo(ptr, offset);
+        }
+    }
+
+    // members terminator
+    if (ptr != nullptr)
+    {
+        ptr[offset] = 0;
+    }
+    offset++;
+
+    for (int i = 0; i < m_num_members; ++i)
+    {
+        if (members[i].m_static_member_address != 0)
+            members[i].DumpStaticDebugInfo(ptr, offset);
+    }
+
+}
+
+void ArrayTypeInfo::DumpDebugInfo(char* ptr, int& offset)
+{
+    if (m_type_offset != 0)
+    {
+        return;
+    }
+    if (m_elem_type->m_type_offset == 0)
+    {
+        m_elem_type->DumpDebugInfo(ptr, offset);
+    }
+    if (ptr != nullptr)
+    {
+        DebugInfoArrayType arrType;
+
+        arrType.m_abbrev = 10; // DW_TAG_array_type abbrev
+        arrType.m_type = m_elem_type->m_type_offset;
+
+        memcpy(ptr + offset, &arrType, sizeof(DebugInfoArrayType));
+        m_type_offset = offset;
+    }
+    offset += sizeof(DebugInfoArrayType);
+
+    char tmp[16] = { 0 };
+    int len = Leb128Encode(static_cast<int32_t>(m_count_offset), tmp, sizeof(tmp));
+    if (ptr != nullptr)
+    {
+        char buf[64];
+        buf[0] = 11; // DW_TAG_subrange_type abbrev
+        buf[1] = len + 3;
+        buf[2] = DW_OP_push_object_address;
+        buf[3] = DW_OP_plus_uconst;
+        for (int j = 0; j < len; j++)
+        {
+            buf[j + 4] = tmp[j];
+        }
+        buf[len + 4] = DW_OP_deref;
+
+        memcpy(ptr + offset, buf, len + 5);
+    }
+    offset += (len + 5);
+
+    if (ptr != nullptr)
+    {
+        memset(ptr + offset, 0, 1);
+    }
+    offset += 1;
+}
+
+void VarDebugInfo::DumpStrings(char *ptr, int& offset)
+{
+    if (ptr != nullptr)
+    {
+        strcpy(ptr + offset, m_var_name);
+        m_var_name_offset = offset;
+    }
+    offset += strlen(m_var_name) + 1;
+}
+
+void VarDebugInfo::DumpDebugInfo(char* ptr, int& offset)
+{
+    char bufVarLoc[16];
+    int len = GetFrameLocation(m_native_offset, bufVarLoc);
+    if (ptr != nullptr)
+    {
+        DebugInfoVar bufVar;
+
+        bufVar.m_var_abbrev = m_var_abbrev;
+        bufVar.m_var_name = m_var_name_offset;
+        bufVar.m_var_file = 1;
+        bufVar.m_var_line = 1;
+        bufVar.m_var_type = m_var_type->m_type_offset;
+        memcpy(ptr + offset, &bufVar, sizeof(DebugInfoVar));
+        memcpy(ptr + offset + sizeof(DebugInfoVar), bufVarLoc, len);
+    }
+    offset += sizeof(DebugInfoVar);
+    offset += len;
+}
+
 /* static data for symbol strings */
 struct Elf_Symbol {
     const char* m_name;
     int m_off;
     TADDR m_value;
     int m_section, m_size;
-    Elf_Symbol() : m_name(nullptr), m_off(0), m_value(0), m_section(0), m_size(0) {}
+    bool m_releaseName;
+    Elf_Symbol() : m_name(nullptr), m_off(0), m_value(0), m_section(0), m_size(0), m_releaseName(false) {}
+    ~Elf_Symbol()
+    {
+        if (m_releaseName)
+            delete [] m_name;
+    }
 };
+
+static int countFuncs(const SymbolsInfo *lines, int nlines)
+{
+    int count = 0;
+    for (int i = 0; i < nlines; i++) {
+        if (lines[i].ilOffset == ICorDebugInfo::PROLOG)
+        {
+            count++;
+        }
+    }
+    return count;
+}
+
+static int getNextPrologueIndex(int from, const SymbolsInfo *lines, int nlines)
+{
+    for (int i = from; i < nlines; ++i) {
+        if (lines[i].ilOffset == ICorDebugInfo::PROLOG)
+        {
+            return i;
+        }
+    }
+    return -1;
+}
 
 int SymbolCount = 0;
 NewArrayHolder<Elf_Symbol> SymbolNames;
-TADDR MinCallAddr, MaxCallAddr;
+NotifyGdb::AddrSet codeAddrs;
 
 /* Create ELF/DWARF debug info for jitted method */
 void NotifyGdb::MethodCompiled(MethodDesc* MethodDescPtr)
@@ -623,16 +1331,12 @@ void NotifyGdb::MethodCompiled(MethodDesc* MethodDescPtr)
     NewArrayHolder<SymbolsInfo> symInfo = nullptr;
     LocalsInfo locals;
 
-
-
     /* Get method name & size of jitted code */
     LPCUTF8 methodName = MethodDescPtr->GetName();
     EECodeInfo codeInfo(pCode);
     TADDR codeSize = codeInfo.GetCodeManager()->GetFunctionSize(codeInfo.GetGCInfoToken());
-    
-#ifdef _TARGET_ARM_
-    pCode &= ~1; // clear thumb flag for debug info
-#endif    
+
+    pCode = PCODEToPINSTR(pCode);
 
     /* Get module name */
     const Module* mod = MethodDescPtr->GetMethodTable()->GetModule();
@@ -702,16 +1406,16 @@ void NotifyGdb::MethodCompiled(MethodDesc* MethodDescPtr)
     }
 
     if (isUserDebug == FALSE)
-        return;
-    
-    CodeHeader* pCH = ((CodeHeader*)(pCode & ~1)) - 1;
-    CalledMethod* pCalledMethods = reinterpret_cast<CalledMethod*>(pCH->GetCalledMethods());
-    /* Collect addresses of thunks called by method */
-    if (!CollectCalledMethods(pCalledMethods))
     {
         return;
     }
-    pCH->SetCalledMethods(NULL);
+
+    NewHolder<TK_TypeInfoMap> pTypeMap = new TK_TypeInfoMap();
+
+    if (pTypeMap == nullptr)
+    {
+        return;
+    }
 
     /* Get debug info for method from portable PDB */
     HRESULT hr = GetDebugInfoFromPDB(MethodDescPtr, &symInfo, symInfoLen, locals);
@@ -720,25 +1424,64 @@ void NotifyGdb::MethodCompiled(MethodDesc* MethodDescPtr)
         return;
     }
 
-    NewArrayHolder<LocalsDebugInfo> localsDebug = new(nothrow) LocalsDebugInfo[locals.size];
+    int method_count = countFuncs(symInfo, symInfoLen);
+    if (!method.Alloc(method_count)) {
+        return;
+    }
 
-    MetaSig* sig = new MetaSig(MethodDescPtr);
-    int nArgsCount = sig->NumFixedArgs();
-    if (sig->HasThis())
+    CodeHeader* pCH = (CodeHeader*)pCode - 1;
+    CalledMethod* pCalledMethods = reinterpret_cast<CalledMethod*>(pCH->GetCalledMethods());
+    /* Collect addresses of thunks called by method */
+    if (!CollectCalledMethods(pCalledMethods))
+    {
+        return;
+    }
+    pCH->SetCalledMethods(NULL);
+    if (!codeAddrs.Contains((TADDR)pCode))
+        codeAddrs.Add((TADDR)pCode);
+
+    MetaSig sig(MethodDescPtr);
+    int nArgsCount = sig.NumFixedArgs();
+    if (sig.HasThis())
         nArgsCount++;
-    delete sig;
 
-    ULONG typeSize = 0;
-    int typeEncoding = 0;
-    const char* typeStr;
-    GetArgTypeInfo(MethodDescPtr, 0, &typeStr, typeSize, typeEncoding);
-    retType.m_type_abbrev = 2;
-    retType.m_encoding = typeEncoding;
-    retType.m_byte_size = typeSize;
+    unsigned int firstLineIndex = 0;
+    for (;firstLineIndex < symInfoLen; firstLineIndex++) {
+        if (symInfo[firstLineIndex].lineNumber != 0 && symInfo[firstLineIndex].lineNumber != HiddenLine) break;
+    }
 
-    NewArrayHolder<ArgsDebugInfo> argsDebug = new(nothrow) ArgsDebugInfo[nArgsCount];
+    if (firstLineIndex >= symInfoLen)
+    {
+        return;
+    }
 
-    GetLocalsDebugInfo(MethodDescPtr, locals, localsDebug, locals.size, argsDebug, nArgsCount, symInfo[0].nativeOffset);
+    int start_index = getNextPrologueIndex(0, symInfo, symInfoLen);
+
+    for (int method_index = 0; method_index < method.GetCount(); ++method_index)
+    {
+        method[method_index] = new FunctionMember(MethodDescPtr, locals.size, nArgsCount);
+
+        int end_index = getNextPrologueIndex(start_index + 1, symInfo, symInfoLen);
+
+        PCODE method_start = symInfo[start_index].nativeOffset;
+        TADDR method_size = end_index == -1 ? codeSize - method_start : symInfo[end_index].nativeOffset - method_start;
+
+        // method return type
+        method[method_index]->m_member_type = GetArgTypeInfo(MethodDescPtr, pTypeMap, 0);
+        method[method_index]->GetLocalsDebugInfo(pTypeMap, locals, symInfo[firstLineIndex].nativeOffset);
+        method[method_index]->m_sub_low_pc = pCode + method_start;
+        method[method_index]->m_sub_high_pc = method_size;
+        method[method_index]->m_member_name = new char[strlen(methodName) + 10];
+        if (method_index == 0)
+            sprintf(method[method_index]->m_member_name, "%s", methodName);
+        else
+            sprintf(method[method_index]->m_member_name, "%s_%i", methodName, method_index);
+
+        // method's class
+        GetTypeInfoFromTypeHandle(TypeHandle(method[method_index]->md->GetMethodTable()), pTypeMap);
+
+        start_index = end_index;
+    }
 
     MemBuf elfHeader, sectHeaders, sectStr, sectSymTab, sectStrTab, dbgInfo, dbgAbbrev, dbgPubname, dbgPubType, dbgLine,
         dbgStr, elfFile;
@@ -748,8 +1491,7 @@ void NotifyGdb::MethodCompiled(MethodDesc* MethodDescPtr)
     {
         return;
     }
-    debugInfoSub.m_sub_low_pc = pCode;
-    debugInfoSub.m_sub_high_pc = codeSize;
+
     /* Build .debug_line section */
     if (!BuildLineTable(dbgLine, pCode, codeSize, symInfo, symInfoLen))
     {
@@ -757,16 +1499,15 @@ void NotifyGdb::MethodCompiled(MethodDesc* MethodDescPtr)
     }
     
     DebugStrings[1] = szModuleFile;
-    DebugStrings[3] = methodName;
     
     /* Build .debug_str section */
-    if (!BuildDebugStrings(dbgStr, argsDebug, nArgsCount, localsDebug, locals.size, typeStr))
+    if (!BuildDebugStrings(dbgStr, pTypeMap))
     {
         return;
     }
     
     /* Build .debug_info section */
-    if (!BuildDebugInfo(dbgInfo, argsDebug, nArgsCount, localsDebug, locals.size))
+    if (!BuildDebugInfo(dbgInfo, pTypeMap))
     {
         return;
     }
@@ -786,14 +1527,16 @@ void NotifyGdb::MethodCompiled(MethodDesc* MethodDescPtr)
     {
         return;
     }
-
+    
     /* Build .strtab section */
-     SymbolNames[0].m_name = "";
-     SymbolNames[1].m_name = methodName;
-     SymbolNames[1].m_value = pCode;
-     SymbolNames[1].m_section = 1;
-     SymbolNames[1].m_size = codeSize;
-        
+    SymbolNames[0].m_name = "";
+    for (int i = 0; i < method.GetCount(); ++i)
+    {
+        SymbolNames[1 + i].m_name = method[i]->m_member_name;
+        SymbolNames[1 + i].m_value = method[i]->m_sub_low_pc;
+        SymbolNames[1 + i].m_section = 1;
+        SymbolNames[1 + i].m_size = method[i]->m_sub_high_pc;
+    }
     if (!BuildStringTableSection(sectStrTab))
     {
         return;
@@ -804,15 +1547,8 @@ void NotifyGdb::MethodCompiled(MethodDesc* MethodDescPtr)
         return;
     }
 
-
-    /* Build section names section */
-    if (!BuildSectionNameTable(sectStr))
-    {
-        return;
-    }
-
-    /* Build section headers table */
-    if (!BuildSectionTable(sectHeaders))
+    /* Build section headers table and section names table */
+    if (!BuildSectionTables(sectHeaders, sectStr))
     {
         return;
     }
@@ -854,15 +1590,20 @@ void NotifyGdb::MethodCompiled(MethodDesc* MethodDescPtr)
     ++pShdr; // .symtab
     pShdr->sh_offset = offset;
     pShdr->sh_size = sectSymTab.MemSize;
-    pShdr->sh_link = 10;
+    pShdr->sh_link = GetSectionIndex(".strtab");
     offset += sectSymTab.MemSize;
     ++pShdr; // .strtab
     pShdr->sh_offset = offset;
     pShdr->sh_size = sectStrTab.MemSize;
     offset += sectStrTab.MemSize;
-    ++pShdr; // .thunks
-    pShdr->sh_addr = MinCallAddr;
-    pShdr->sh_size = (MaxCallAddr - MinCallAddr) + 8;
+
+    // .thunks
+    for (int i = 1 + method.GetCount(); i < SymbolCount; i++)
+    {
+        ++pShdr;
+        pShdr->sh_addr = PCODEToPINSTR(SymbolNames[i].m_value);
+        pShdr->sh_size = 8;
+    }
 
     /* Build ELF header */
     if (!BuildELFHeader(elfHeader))
@@ -880,8 +1621,9 @@ void NotifyGdb::MethodCompiled(MethodDesc* MethodDescPtr)
 #endif    
     header->e_shoff = offset;
     header->e_shentsize = sizeof(Elf_Shdr);
-    header->e_shnum = SectionNamesCount - 1;
-    header->e_shstrndx = 2;
+    int thunks_count = SymbolCount - method.GetCount() - 1;
+    header->e_shnum = SectionNamesCount + thunks_count;
+    header->e_shstrndx = GetSectionIndex(".shstrtab");
 
     /* Build ELF image in memory */
     elfFile.MemSize = elfHeader.MemSize + sectStr.MemSize + dbgStr.MemSize + dbgAbbrev.MemSize + dbgInfo.MemSize +
@@ -925,7 +1667,7 @@ void NotifyGdb::MethodCompiled(MethodDesc* MethodDescPtr)
 #endif
 
     /* Create GDB JIT structures */
-    jit_code_entry* jit_symbols = new (nothrow) jit_code_entry;
+    NewHolder<jit_code_entry> jit_symbols = new (nothrow) jit_code_entry;
     
     if (jit_symbols == nullptr)
     {
@@ -946,15 +1688,21 @@ void NotifyGdb::MethodCompiled(MethodDesc* MethodDescPtr)
         head->prev_entry = jit_symbols;
     }
     
+    jit_symbols.SuppressRelease();
+
     /* Notify the debugger */
     __jit_debug_descriptor.relevant_entry = jit_symbols;
     __jit_debug_descriptor.action_flag = JIT_REGISTER_FN;
     __jit_debug_register_code();
-
 }
 
 void NotifyGdb::MethodDropped(MethodDesc* MethodDescPtr)
 {
+    static const int textSectionIndex = GetSectionIndex(".text");
+
+    if (textSectionIndex < 0)
+        return;
+
     PCODE pCode = MethodDescPtr->GetNativeCode();
 
     if (pCode == NULL)
@@ -968,7 +1716,7 @@ void NotifyGdb::MethodDropped(MethodDesc* MethodDescPtr)
         
         const Elf_Ehdr* pEhdr = reinterpret_cast<const Elf_Ehdr*>(ptr);
         const Elf_Shdr* pShdr = reinterpret_cast<const Elf_Shdr*>(ptr + pEhdr->e_shoff);
-        ++pShdr; // bump to .text section
+        pShdr += textSectionIndex; // bump to .text section
         if (pShdr->sh_addr == pCode)
         {
             /* Notify the debugger */
@@ -1029,7 +1777,7 @@ bool NotifyGdb::BuildLineTable(MemBuf& buf, PCODE startAddr, TADDR codeSize, Sym
 /* Buid the source files table for DWARF source line info */
 bool NotifyGdb::BuildFileTable(MemBuf& buf, SymbolsInfo* lines, unsigned nlines)
 {
-    const char** files = nullptr;
+    NewArrayHolder<const char*> files = nullptr;
     unsigned nfiles = 0;
     
     /* GetValue file names and replace them with indices in file table */
@@ -1038,6 +1786,8 @@ bool NotifyGdb::BuildFileTable(MemBuf& buf, SymbolsInfo* lines, unsigned nlines)
         return false;
     for (unsigned i = 0; i < nlines; ++i)
     {
+        if (lines[i].fileName[0] == 0)
+            continue;
         const char *filePath, *fileName;
         SplitPathname(lines[i].fileName, filePath, fileName);
 
@@ -1075,7 +1825,6 @@ bool NotifyGdb::BuildFileTable(MemBuf& buf, SymbolsInfo* lines, unsigned nlines)
     
     if (buf.MemPtr == nullptr)
     {
-        delete[] files;
         return false;
     }
     
@@ -1093,7 +1842,6 @@ bool NotifyGdb::BuildFileTable(MemBuf& buf, SymbolsInfo* lines, unsigned nlines)
     // final zero byte
     *ptr = 0;
 
-    delete[] files;
     return true;
 }
 
@@ -1131,18 +1879,40 @@ void NotifyGdb::IssueParamCommand(char*& ptr, uint8_t command, char* param, int 
     }
 }
 
-/* Special command moves address, line number and issue one row to source line matrix */
-void NotifyGdb::IssueSpecialCommand(char*& ptr, int8_t line_shift, uint8_t addr_shift)
+static void fixLineMapping(SymbolsInfo* lines, unsigned nlines)
 {
-    *ptr++ = (line_shift - DWARF_LINE_BASE) + addr_shift * DWARF_LINE_RANGE + DWARF_OPCODE_BASE;
-}
-
-/* Check to see if given shifts are fit into one byte command */
-bool NotifyGdb::FitIntoSpecialOpcode(int8_t line_shift, uint8_t addr_shift)
-{
-    unsigned opcode = (line_shift - DWARF_LINE_BASE) + addr_shift * DWARF_LINE_RANGE + DWARF_OPCODE_BASE;
-    
-    return opcode < 255;
+    // Fix EPILOGUE line mapping
+    int prevLine = 0;
+    for (int i = 0; i < nlines; ++i)
+    {
+        if (lines[i].ilOffset == ICorDebugInfo::PROLOG) // will be fixed in next step
+        {
+            prevLine = 0;
+        }
+        else
+        {
+            if (lines[i].lineNumber == 0 || lines[i].lineNumber == HiddenLine)
+            {
+                if (prevLine != 0)
+                {
+                    lines[i].lineNumber = prevLine;
+                }
+            }
+            else
+            {
+                prevLine = lines[i].lineNumber;
+            }
+        }
+    }
+    // Fix PROLOGUE line mapping
+    prevLine = lines[nlines - 1].lineNumber;
+    for (int i = nlines - 1; i >= 0; --i)
+    {
+        if (lines[i].lineNumber == 0 || lines[i].lineNumber == HiddenLine)
+            lines[i].lineNumber = prevLine;
+        else
+            prevLine = lines[i].lineNumber;
+    }
 }
 
 /* Build program for DWARF source line section */
@@ -1150,12 +1920,13 @@ bool NotifyGdb::BuildLineProg(MemBuf& buf, PCODE startAddr, TADDR codeSize, Symb
 {
     static char cnv_buf[16];
     
-    /* reserve memory assuming worst case: one extended and one special plus advance line command for each line*/
-    buf.MemSize = 3 + ADDRESS_SIZE               /* initial set address command */
-                + 1                              /* set prolog end command */
+    /* reserve memory assuming worst case: set address, advance line command, set proglogue/epilogue and copy for each line */
+    buf.MemSize =
                 + 6                              /* set file command */
                 + nlines * 6                     /* advance line commands */
-                + nlines * (4 + ADDRESS_SIZE)    /* 1 extended + 1 special command */
+                + nlines * (3 + ADDRESS_SIZE)    /* set address commands */
+                + nlines * 1                     /* set prologue end or epilogue begin commands */
+                + nlines * 1                     /* copy commands */
                 + 6                              /* advance PC command */
                 + 3;                             /* end of sequence command */
     buf.MemPtr = new (nothrow) char[buf.MemSize];
@@ -1163,13 +1934,11 @@ bool NotifyGdb::BuildLineProg(MemBuf& buf, PCODE startAddr, TADDR codeSize, Symb
   
     if (buf.MemPtr == nullptr)
         return false;
-    
-    /* set absolute start address */
-    IssueSetAddress(ptr, startAddr);
-    IssueSimpleCommand(ptr, DW_LNS_set_prologue_end);
-    
-    int prevLine = 1, prevAddr = 0, prevFile = 0;
-    
+
+    fixLineMapping(lines, nlines);
+
+    int prevLine = 1, prevFile = 0;
+
     for (int i = 0; i < nlines; ++i)
     {
         /* different source file */
@@ -1179,29 +1948,28 @@ bool NotifyGdb::BuildLineProg(MemBuf& buf, PCODE startAddr, TADDR codeSize, Symb
             IssueParamCommand(ptr, DW_LNS_set_file, cnv_buf, len);
             prevFile = lines[i].fileIndex;
         }
-        /* too big line number shift */
-        if (lines[i].lineNumber - prevLine > (DWARF_LINE_BASE + DWARF_LINE_RANGE - 1))
-        {
+
+        IssueSetAddress(ptr, startAddr + lines[i].nativeOffset);
+
+        if (lines[i].lineNumber != prevLine) {
             int len = Leb128Encode(static_cast<int32_t>(lines[i].lineNumber - prevLine), cnv_buf, sizeof(cnv_buf));
             IssueParamCommand(ptr, DW_LNS_advance_line, cnv_buf, len);
             prevLine = lines[i].lineNumber;
         }
-        /* first try special opcode */
-        if (FitIntoSpecialOpcode(lines[i].lineNumber - prevLine, lines[i].nativeOffset - prevAddr))
-            IssueSpecialCommand(ptr, lines[i].lineNumber - prevLine, lines[i].nativeOffset - prevAddr);
-        else
-        {
-            IssueSetAddress(ptr, startAddr + lines[i].nativeOffset);
-            IssueSpecialCommand(ptr, lines[i].lineNumber - prevLine, 0);
-        }
-           
-        prevLine = lines[i].lineNumber;
-        prevAddr = lines[i].nativeOffset;
+
+        if (lines[i].ilOffset == ICorDebugInfo::EPILOG)
+            IssueSimpleCommand(ptr, DW_LNS_set_epilogue_begin);
+        else if (i > 0 && lines[i - 1].ilOffset == ICorDebugInfo::PROLOG)
+            IssueSimpleCommand(ptr, DW_LNS_set_prologue_end);
+
+        IssueParamCommand(ptr, DW_LNS_copy, NULL, 0);
     }
-    
+
+    int lastAddr = nlines > 0 ? lines[nlines - 1].nativeOffset : 0;
+
     // Advance PC to the end of function
-    if (prevAddr < codeSize) {
-        int len = Leb128Encode(static_cast<uint32_t>(codeSize - prevAddr), cnv_buf, sizeof(cnv_buf));
+    if (lastAddr < codeSize) {
+        int len = Leb128Encode(static_cast<uint32_t>(codeSize - lastAddr), cnv_buf, sizeof(cnv_buf));
         IssueParamCommand(ptr, DW_LNS_advance_pc, cnv_buf, len);
     }
 
@@ -1212,39 +1980,29 @@ bool NotifyGdb::BuildLineProg(MemBuf& buf, PCODE startAddr, TADDR codeSize, Symb
 }
 
 /* Build the DWARF .debug_str section */
-bool NotifyGdb::BuildDebugStrings(MemBuf& buf,
-                                  NewArrayHolder<ArgsDebugInfo>& argsDebug,
-                                  unsigned int argsDebugSize,
-                                  NewArrayHolder<LocalsDebugInfo>& localsDebug,
-                                  unsigned int localsDebugSize, const char *retTypeStr)
+bool NotifyGdb::BuildDebugStrings(MemBuf& buf, PTK_TypeInfoMap pTypeMap)
 {
-    uint32_t totalLength = 0;
-    
+    int totalLength = 0;
+
     /* calculate total section size */
     for (int i = 0; i < DebugStringCount; ++i)
     {
         totalLength += strlen(DebugStrings[i]) + 1;
     }
 
-    retType.m_type_name = totalLength;
-    totalLength += strlen(retTypeStr) + 1;
-
-    for (int i = 0; i < argsDebugSize; ++i)
+    for (int i = 0; i < method.GetCount(); ++i)
     {
-        argsDebug[i].m_type_name_offset = totalLength;
-        totalLength += strlen(argsDebug[i].m_type_name) + 1;
-
-        argsDebug[i].m_arg_name_offset = totalLength;
-        totalLength += strlen(argsDebug[i].m_arg_name) + 1;
+        method[i]->DumpStrings(nullptr, totalLength);
     }
 
-    for (int i = 0; i < localsDebugSize; ++i)
     {
-        localsDebug[i].m_type_name_offset = totalLength;
-        totalLength += strlen(localsDebug[i].m_type_name) + 1;
-
-        localsDebug[i].m_var_name_offset = totalLength;
-        totalLength += strlen(localsDebug[i].m_var_name) + 1;
+        auto iter = pTypeMap->Begin();
+        while (iter != pTypeMap->End())
+        {
+            TypeInfoBase *typeInfo = iter->Value();
+            typeInfo->DumpStrings(nullptr, totalLength);
+            iter++;
+        }
     }
 
     buf.MemSize = totalLength;
@@ -1255,30 +2013,26 @@ bool NotifyGdb::BuildDebugStrings(MemBuf& buf,
 
     /* copy strings */
     char* bufPtr = buf.MemPtr;
+    int offset = 0;
     for (int i = 0; i < DebugStringCount; ++i)
     {
-        strcpy(bufPtr, DebugStrings[i]);
-        bufPtr += strlen(DebugStrings[i]) + 1;
+        strcpy(bufPtr + offset, DebugStrings[i]);
+        offset += strlen(DebugStrings[i]) + 1;
     }
 
-    strcpy(bufPtr, retTypeStr);
-    bufPtr += strlen(retTypeStr) + 1;
-    for (int i = 0; i < argsDebugSize; ++i)
+    for (int i = 0; i < method.GetCount(); ++i)
     {
-        strcpy(bufPtr, argsDebug[i].m_type_name);
-        bufPtr += strlen(argsDebug[i].m_type_name) + 1;
-
-        strcpy(bufPtr, argsDebug[i].m_arg_name);
-        bufPtr += strlen(argsDebug[i].m_arg_name) + 1;
+        method[i]->DumpStrings(bufPtr, offset);
     }
 
-    for (int i = 0; i < localsDebugSize; ++i)
     {
-        strcpy(bufPtr, localsDebug[i].m_type_name);
-        bufPtr += strlen(localsDebug[i].m_type_name) + 1;
-
-        strcpy(bufPtr, localsDebug[i].m_var_name);
-        bufPtr += strlen(localsDebug[i].m_var_name) + 1;
+        auto iter = pTypeMap->Begin();
+        while (iter != pTypeMap->End())
+        {
+            TypeInfoBase *typeInfo = iter->Value();
+            typeInfo->DumpStrings(bufPtr, offset);
+            iter++;
+        }
     }
 
     return true;
@@ -1297,51 +2051,27 @@ bool NotifyGdb::BuildDebugAbbrev(MemBuf& buf)
     return true;
 }
 
-int NotifyGdb::GetArgsAndLocalsLen(NewArrayHolder<ArgsDebugInfo>& argsDebug,
-                                   unsigned int argsDebugSize,
-                                   NewArrayHolder<LocalsDebugInfo>& localsDebug,
-                                   unsigned int localsDebugSize)
-{
-    int locSize = 0;
-    char tmpBuf[16];
-
-    // Format for DWARF location expression: [expression length][operation][offset in SLEB128 encoding]
-    for (int i = 0; i < argsDebugSize; i++)
-    {
-        locSize += 2; // First byte contains expression length, second byte contains operation (DW_OP_fbreg).
-        locSize += Leb128Encode(static_cast<int32_t>(argsDebug[i].m_native_offset), tmpBuf, sizeof(tmpBuf));
-    }
-    for (int i = 0; i < localsDebugSize; i++)
-    {
-        locSize += 2;  // First byte contains expression length, second byte contains operation (DW_OP_fbreg).
-        locSize += Leb128Encode(static_cast<int32_t>(localsDebug[i].m_native_offset), tmpBuf, sizeof(tmpBuf));
-    }
-    return locSize;
-}
-
-int NotifyGdb::GetFrameLocation(int nativeOffset, char* bufVarLoc)
-{
-    char cnvBuf[16] = {0};
-    int len = Leb128Encode(static_cast<int32_t>(nativeOffset), cnvBuf, sizeof(cnvBuf));
-    bufVarLoc[0] = len + 1;
-    bufVarLoc[1] = DW_OP_fbreg;
-    for (int j = 0; j < len; j++)
-    {
-        bufVarLoc[j + 2] = cnvBuf[j];
-    }
-
-    return len + 2;  // We add '2' because first 2 bytes contain length of expression and DW_OP_fbreg operation.
-}
 /* Build tge DWARF .debug_info section */
-bool NotifyGdb::BuildDebugInfo(MemBuf& buf, NewArrayHolder<ArgsDebugInfo> &argsDebug, unsigned int argsDebugSize,
-                               NewArrayHolder<LocalsDebugInfo> &localsDebug, unsigned int localsDebugSize)
+bool NotifyGdb::BuildDebugInfo(MemBuf& buf, PTK_TypeInfoMap pTypeMap)
 {
+    int totalTypeVarSubSize = 0;
+    {
+        auto iter = pTypeMap->Begin();
+        while (iter != pTypeMap->End())
+        {
+            TypeInfoBase *typeInfo = iter->Value();
+            typeInfo->DumpDebugInfo(nullptr, totalTypeVarSubSize);
+            iter++;
+        }
+    }
 
-    int locSize = GetArgsAndLocalsLen(argsDebug, argsDebugSize, localsDebug, localsDebugSize);
-    buf.MemSize = sizeof(DwarfCompUnit) + sizeof(DebugInfoCU) + sizeof(DebugInfoSub) +
-                  sizeof(DebugInfoType) + (sizeof(DebugInfoVar) +
-                  sizeof(DebugInfoType)) * (localsDebugSize + argsDebugSize) + locSize + 2; // Last 2 bytes contain zero end marker.
+    for (int i = 0; i < method.GetCount(); ++i)
+    {
+        method[i]->DumpDebugInfo(nullptr, totalTypeVarSubSize);
+    }
 
+    //int locSize = GetArgsAndLocalsLen(argsDebug, argsDebugSize, localsDebug, localsDebugSize);
+    buf.MemSize = sizeof(DwarfCompUnit) + sizeof(DebugInfoCU) + totalTypeVarSubSize + 2;
     buf.MemPtr = new (nothrow) char[buf.MemSize];
 
     if (buf.MemPtr == nullptr)
@@ -1360,78 +2090,27 @@ bool NotifyGdb::BuildDebugInfo(MemBuf& buf, NewArrayHolder<ArgsDebugInfo> &argsD
     offset += sizeof(DebugInfoCU);
     diCU->m_prod_off = 0;
     diCU->m_cu_name = strlen(DebugStrings[0]) + 1;
-    debugInfoSub.m_sub_type = offset;
-
-
-    memcpy(buf.MemPtr + offset, &retType, sizeof(DebugInfoType));
-    offset += sizeof(DebugInfoType);
-
-    DebugInfoType* bufType = new (nothrow) DebugInfoType[localsDebugSize + argsDebugSize];
-    if (bufType == nullptr)
-        return false;
-    // TODO: args
-    for (int i = 0; i < argsDebugSize; i++)
     {
-        bufType[i].m_type_abbrev = 2;
-        bufType[i].m_type_name = argsDebug[i].m_type_name_offset;
-        bufType[i].m_encoding = argsDebug[i].m_type_encoding;
-        bufType[i].m_byte_size = argsDebug[i].m_type_size;
-        argsDebug[i].m_type_offset = offset + i * sizeof(DebugInfoType);
+        auto iter = pTypeMap->Begin();
+        while (iter != pTypeMap->End())
+        {
+            TypeInfoBase *typeInfo = iter->Value();
+            typeInfo->DumpDebugInfo(buf.MemPtr, offset);
+            iter++;
+        }
     }
- 
-    for (int i = argsDebugSize; i < (localsDebugSize + argsDebugSize); i++)
+    for (int i = 0; i < method.GetCount(); ++i)
     {
-        bufType[i].m_type_abbrev = 2;
-        bufType[i].m_type_name = localsDebug[i-argsDebugSize].m_type_name_offset;
-        bufType[i].m_encoding = localsDebug[i-argsDebugSize].m_type_encoding;
-        bufType[i].m_byte_size = localsDebug[i-argsDebugSize].m_type_size;
-        localsDebug[i - argsDebugSize].m_type_offset = offset + i * sizeof(DebugInfoType);
+        if (!method[i]->IsDumped())
+        {
+            method[i]->DumpDebugInfo(buf.MemPtr, offset);
+        }
+        else
+        {
+            method[i]->DumpDebugInfo(buf.MemPtr, method[i]->m_entry_offset);
+        }
     }
-    memcpy(buf.MemPtr + offset, bufType, sizeof(DebugInfoType) * (localsDebugSize + argsDebugSize));
-    offset += sizeof(DebugInfoType) * (localsDebugSize + argsDebugSize);
-
-    /* copy debug information */
-    DebugInfoSub* diSub = reinterpret_cast<DebugInfoSub*>(buf.MemPtr + offset);
-    memcpy(buf.MemPtr + offset, &debugInfoSub, sizeof(DebugInfoSub));
-    diSub->m_sub_name = strlen(DebugStrings[0]) + 1 + strlen(DebugStrings[1]) + 1 + strlen(DebugStrings[2]) + 1;
-    offset += sizeof(DebugInfoSub);
-    DebugInfoVar* bufVar = new (nothrow) DebugInfoVar[localsDebugSize + argsDebugSize];
-    if (bufVar == nullptr)
-        return false;
-    char bufVarLoc[16];
-
-    for (int i = 0; i < argsDebugSize; i++)
-    {
-        bufVar[i].m_var_abbrev = 6;
-        bufVar[i].m_var_name = argsDebug[i].m_arg_name_offset;
-        bufVar[i].m_var_file = 1;
-        bufVar[i].m_var_line = 1;
-        bufVar[i].m_var_type = argsDebug[i].m_type_offset;
-        memcpy(buf.MemPtr + offset, &bufVar[i], sizeof(DebugInfoVar));
-        offset += sizeof(DebugInfoVar);
-        int len = GetFrameLocation(argsDebug[i].m_native_offset, bufVarLoc);
-        memcpy(buf.MemPtr + offset, bufVarLoc, len);
-        offset += len;
-    }
-
-    for (int i = argsDebugSize; i < (localsDebugSize + argsDebugSize); i++)
-    {
-        bufVar[i].m_var_abbrev = 5;
-        bufVar[i].m_var_name = localsDebug[i-argsDebugSize].m_var_name_offset;
-        bufVar[i].m_var_file = 1;
-        bufVar[i].m_var_line = 1;
-        bufVar[i].m_var_type = localsDebug[i-argsDebugSize].m_type_offset;
-        memcpy(buf.MemPtr + offset, &bufVar[i], sizeof(DebugInfoVar));
-        offset += sizeof(DebugInfoVar);
-        int len = GetFrameLocation(localsDebug[i-argsDebugSize].m_native_offset, bufVarLoc);
-        memcpy(buf.MemPtr + offset, bufVarLoc, len);
-        offset += len;
-    }
-    delete []bufVar;
-
-    /* zero end marker */
-    buf.MemPtr[buf.MemSize-2] = 0;
-    buf.MemPtr[buf.MemSize-1] = 0;
+    memset(buf.MemPtr + offset, 0, buf.MemSize - offset);
     return true;
 }
 
@@ -1461,39 +2140,39 @@ bool NotifyGdb::BuildDebugPub(MemBuf& buf, const char* name, uint32_t size, uint
 /* Store addresses and names of the called methods into symbol table */
 bool NotifyGdb::CollectCalledMethods(CalledMethod* pCalledMethods)
 {
-    int calledCount = 0;
+    AddrSet tmpCodeAddrs;
+
     CalledMethod* pList = pCalledMethods;
 
-    MinCallAddr = (TADDR)~0; MaxCallAddr = (TADDR)0;
-
-    /* count called methods and find min & max addresses */
+     /* count called methods */
     while (pList != NULL)
     {
-        calledCount++;
         TADDR callAddr = (TADDR)pList->GetCallAddr();
-#if defined(_TARGET_ARM_)
-        callAddr &= ~1;
-#endif
-        if(callAddr < MinCallAddr)
-            MinCallAddr = callAddr;
-        if(callAddr > MaxCallAddr)
-            MaxCallAddr = callAddr;
+        if (!tmpCodeAddrs.Contains(callAddr) && !codeAddrs.Contains(callAddr)) {
+            tmpCodeAddrs.Add(callAddr);
+        }
         pList = pList->GetNext();
     }
 
-    SymbolCount = 2 + calledCount;
+    SymbolCount = 1 + method.GetCount() + tmpCodeAddrs.GetCount();
     SymbolNames = new (nothrow) Elf_Symbol[SymbolCount];
 
     pList = pCalledMethods;
-    for (int i = 2; i < SymbolCount; ++i)
+    for (int i = 1 + method.GetCount(); i < SymbolCount;)
     {
-        char buf[256];
-        MethodDesc* pMD = pList->GetMethodDesc();
-        sprintf(buf, "__thunk_%s", pMD->GetName());
-        SymbolNames[i].m_name = new char[strlen(buf) + 1];
-        strcpy((char*)SymbolNames[i].m_name, buf);
         TADDR callAddr = (TADDR)pList->GetCallAddr();
-        SymbolNames[i].m_value = callAddr - MinCallAddr;
+        if (!codeAddrs.Contains(callAddr))
+        {
+            MethodDesc* pMD = pList->GetMethodDesc();
+            LPCUTF8 methodName = pMD->GetName();
+            int symbolNameLength = strlen(methodName) + sizeof("__thunk_");
+            SymbolNames[i].m_name = new char[symbolNameLength];
+            SymbolNames[i].m_releaseName = true;
+            sprintf((char*)SymbolNames[i].m_name, "__thunk_%s", methodName);
+            SymbolNames[i].m_value = callAddr;
+            ++i;
+            codeAddrs.Add(callAddr);
+        }
         CalledMethod* ptr = pList;
         pList = pList->GetNext();
         delete ptr;
@@ -1529,6 +2208,8 @@ bool NotifyGdb::BuildStringTableSection(MemBuf& buf)
 /* Build ELF .symtab section */
 bool NotifyGdb::BuildSymbolTableSection(MemBuf& buf, PCODE addr, TADDR codeSize)
 {
+    static const int textSectionIndex = GetSectionIndex(".text");
+
     buf.MemSize = SymbolCount * sizeof(Elf_Sym);
     buf.MemPtr = new (nothrow) char[buf.MemSize];
     if (buf.MemPtr == nullptr)
@@ -1543,102 +2224,120 @@ bool NotifyGdb::BuildSymbolTableSection(MemBuf& buf, PCODE addr, TADDR codeSize)
     sym[0].st_size = 0;
     sym[0].st_shndx = SHN_UNDEF;
     
-    sym[1].st_name = SymbolNames[1].m_off;
-    sym[1].setBindingAndType(STB_GLOBAL, STT_FUNC);
-    sym[1].st_other = 0;
-#ifdef _TARGET_ARM_
-    sym[1].st_value = 1; // for THUMB code
-#else    
-    sym[1].st_value = 0;
-#endif    
-    sym[1].st_shndx = 1; // .text section index
-    sym[1].st_size = codeSize;
-
-    for (int i = 2; i < SymbolCount; ++i)
+    for (int i = 1; i < 1 + method.GetCount(); ++i)
     {
         sym[i].st_name = SymbolNames[i].m_off;
         sym[i].setBindingAndType(STB_GLOBAL, STT_FUNC);
         sym[i].st_other = 0;
-        sym[i].st_shndx = 11; // .thunks section index
+        sym[i].st_value = PINSTRToPCODE(SymbolNames[i].m_value - addr);
+        sym[i].st_shndx = textSectionIndex;
+        sym[i].st_size = SymbolNames[i].m_size;
+    }
+
+    for (int i = 1 + method.GetCount(); i < SymbolCount; ++i)
+    {
+        sym[i].st_name = SymbolNames[i].m_off;
+        sym[i].setBindingAndType(STB_GLOBAL, STT_FUNC);
+        sym[i].st_other = 0;
+        sym[i].st_shndx = SectionNamesCount + (i - (1 + method.GetCount())); // .thunks section index
         sym[i].st_size = 8;
-        sym[i].st_value = SymbolNames[i].m_value;
+#ifdef _TARGET_ARM_
+        sym[i].st_value = 1; // for THUMB code
+#else
+        sym[i].st_value = 0;
+#endif
     }
     return true;
 }
 
-/* Build ELF string section */
-bool NotifyGdb::BuildSectionNameTable(MemBuf& buf)
+int NotifyGdb::GetSectionIndex(const char *sectName)
 {
-    uint32_t totalLength = 0;
-    
-    /* calculate total size */
     for (int i = 0; i < SectionNamesCount; ++i)
-    {
-        totalLength += strlen(SectionNames[i]) + 1;
-    }
+        if (strcmp(SectionNames[i], sectName) == 0)
+            return i;
+    return -1;
+}
 
-    buf.MemSize = totalLength;
-    buf.MemPtr = new (nothrow) char[totalLength];
-    if (buf.MemPtr == nullptr)
+/* Build the ELF section headers table and section names table */
+bool NotifyGdb::BuildSectionTables(MemBuf& sectBuf, MemBuf& strBuf)
+{
+    static const int symtabSectionIndex = GetSectionIndex(".symtab");
+    static const int nullSectionIndex = GetSectionIndex("");
+
+    const int thunks_count = SymbolCount - 1 - method.GetCount();
+
+    // Approximate length of single section name.
+    // Used only to reduce memory reallocations.
+    static const int SECT_NAME_LENGTH = 11;
+
+    if (!strBuf.Resize(SECT_NAME_LENGTH * (SectionNamesCount + thunks_count)))
+    {
         return false;
-
-    /* copy strings */
-    char* bufPtr = buf.MemPtr;
-    for (int i = 0; i < SectionNamesCount; ++i)
-    {
-        strcpy(bufPtr, SectionNames[i]);
-        bufPtr += strlen(SectionNames[i]) + 1;
     }
-    
-    return true;
-}
 
-/* Build the ELF section headers table */
-bool NotifyGdb::BuildSectionTable(MemBuf& buf)
-{
-    Elf_Shdr* sectionHeaders = new (nothrow) Elf_Shdr[SectionNamesCount - 1];    
-    Elf_Shdr* pSh = sectionHeaders;
-
+    Elf_Shdr* sectionHeaders = new (nothrow) Elf_Shdr[SectionNamesCount + thunks_count];
     if (sectionHeaders == nullptr)
     {
         return false;
     }
-    
-    /* NULL entry */
-    pSh->sh_name = 0;
-    pSh->sh_type = SHT_NULL;
-    pSh->sh_flags = 0;
-    pSh->sh_addr = 0;
-    pSh->sh_offset = 0;
-    pSh->sh_size = 0;
-    pSh->sh_link = SHN_UNDEF;
-    pSh->sh_info = 0;
-    pSh->sh_addralign = 0;
-    pSh->sh_entsize = 0;
-    
-    ++pSh;
-    /* fill section header data */
-    uint32_t sectNameOffset = 1;
-    for (int i = 1; i < SectionNamesCount - 1; ++i, ++pSh)
+
+    sectBuf.MemPtr = reinterpret_cast<char*>(sectionHeaders);
+    sectBuf.MemSize = sizeof(Elf_Shdr) * (SectionNamesCount + thunks_count);
+
+    Elf_Shdr* pSh = sectionHeaders;
+    uint32_t sectNameOffset = 0;
+
+    // Additional memory for remaining section names,
+    // grows twice on each reallocation.
+    int addSize = SECT_NAME_LENGTH;
+
+    // Fill section headers and names
+    for (int i = 0; i < SectionNamesCount + thunks_count; ++i, ++pSh)
     {
+        char thunkSectNameBuf[256]; // temporary buffer for .thunk_# section name
+        const char *sectName;
+
+        bool isThunkSection = i >= SectionNamesCount;
+        if (isThunkSection)
+        {
+            sprintf(thunkSectNameBuf, ".thunk_%i", i);
+            sectName = thunkSectNameBuf;
+        }
+        else
+        {
+            sectName = SectionNames[i];
+        }
+
+        // Ensure that there is enough memory for section name,
+        // reallocate if necessary.
         pSh->sh_name = sectNameOffset;
-        sectNameOffset += strlen(SectionNames[i]) + 1;
-        pSh->sh_type = Sections[i].m_type;
-        pSh->sh_flags = Sections[i].m_flags;
+        sectNameOffset += strlen(sectName) + 1;
+        if (sectNameOffset > strBuf.MemSize)
+        {
+            // Allocate more memory for remaining section names
+            if (!strBuf.Resize(sectNameOffset + addSize))
+                return false;
+            addSize *= 2;
+        }
+
+        strcpy(strBuf.MemPtr + pSh->sh_name, sectName);
+
+        // All .thunk_* sections have the same type and flags
+        int index = isThunkSection ? SectionNamesCount : i;
+        pSh->sh_type = Sections[index].m_type;
+        pSh->sh_flags = Sections[index].m_flags;
+
         pSh->sh_addr = 0;
         pSh->sh_offset = 0;
         pSh->sh_size = 0;
         pSh->sh_link = SHN_UNDEF;
         pSh->sh_info = 0;
-        pSh->sh_addralign = 1;
-        if (strcmp(SectionNames[i], ".symtab") == 0)
-            pSh->sh_entsize = sizeof(Elf_Sym);
-        else
-            pSh->sh_entsize = 0;
+        pSh->sh_addralign = i == nullSectionIndex ? 0 : 1;
+        pSh->sh_entsize = i == symtabSectionIndex ? sizeof(Elf_Sym) : 0;
     }
 
-    buf.MemPtr = reinterpret_cast<char*>(sectionHeaders);
-    buf.MemSize = sizeof(Elf_Shdr) * (SectionNamesCount - 1);
+    // Set actual used size to avoid garbage in ELF section
+    strBuf.MemSize = sectNameOffset;
     return true;
 }
 
@@ -1646,17 +2345,18 @@ bool NotifyGdb::BuildSectionTable(MemBuf& buf)
 bool NotifyGdb::BuildELFHeader(MemBuf& buf)
 {
     Elf_Ehdr* header = new (nothrow) Elf_Ehdr;
+
+    if (header == nullptr)
+    {
+        return false;
+    }
+
     buf.MemPtr = reinterpret_cast<char*>(header);
     buf.MemSize = sizeof(Elf_Ehdr);
-    
-    if (header == nullptr)
-        return false;
-    
     return true;
-        
 }
 
-/* Split full path name into directory & file anmes */
+/* Split full path name into directory & file names */
 void NotifyGdb::SplitPathname(const char* path, const char*& pathName, const char*& fileName)
 {
     char* pSlash = strrchr(path, '/');
@@ -1672,47 +2372,6 @@ void NotifyGdb::SplitPathname(const char* path, const char*& pathName, const cha
         fileName = path;
         pathName = nullptr;
     }
-}
-
-/* LEB128 for 32-bit unsigned integer */
-int NotifyGdb::Leb128Encode(uint32_t num, char* buf, int size)
-{
-    int i = 0;
-    
-    do
-    {
-        uint8_t byte = num & 0x7F;
-        if (i >= size)
-            break;
-        num >>= 7;
-        if (num != 0)
-            byte |= 0x80;
-        buf[i++] = byte;
-    }
-    while (num != 0);
-    
-    return i;
-}
-
-/* LEB128 for 32-bit signed integer */
-int NotifyGdb::Leb128Encode(int32_t num, char* buf, int size)
-{
-    int i = 0;
-    bool hasMore = true, isNegative = num < 0;
-    
-    while (hasMore && i < size)
-    {
-        uint8_t byte = num & 0x7F;
-        num >>= 7;
-        
-        if ((num == 0 && (byte & 0x40) == 0) || (num  == -1 && (byte & 0x40) == 0x40))
-            hasMore = false;
-        else
-            byte |= 0x80;
-        buf[i++] = byte;
-    }
-    
-    return i;
 }
 
 #ifdef _DEBUG

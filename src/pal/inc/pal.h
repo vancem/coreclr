@@ -671,28 +671,6 @@ CharNextExA(
 #endif
 
 
-PALIMPORT
-int
-PALAPIV
-wsprintfA(
-      OUT LPSTR,
-      IN LPCSTR,
-      ...);
-
-PALIMPORT
-int
-PALAPIV
-wsprintfW(
-      OUT LPWSTR,
-      IN LPCWSTR,
-      ...);
-
-#ifdef UNICODE
-#define wsprintf wsprintfW
-#else
-#define wsprintf wsprintfA
-#endif
-
 #define MB_OK                   0x00000000L
 #define MB_OKCANCEL             0x00000001L
 #define MB_ABORTRETRYIGNORE     0x00000002L
@@ -1853,6 +1831,13 @@ QueueUserAPC(
 
 #define MAXIMUM_SUPPORTED_EXTENSION     512
 
+#define CONTEXT_XSTATE (CONTEXT_i386 | 0x40L)
+
+#define CONTEXT_EXCEPTION_ACTIVE 0x8000000L
+#define CONTEXT_SERVICE_ACTIVE 0x10000000L
+#define CONTEXT_EXCEPTION_REQUEST 0x40000000L
+#define CONTEXT_EXCEPTION_REPORTING 0x80000000L
+
 typedef struct _FLOATING_SAVE_AREA {
     DWORD   ControlWord;
     DWORD   StatusWord;
@@ -1910,6 +1895,16 @@ typedef struct _CONTEXT {
 // be either (as long as we're consistent across GetThreadContext() and SetThreadContext() and we don't
 // support any other values in the ExtendedRegisters) but we might as well be as accurate as we can.
 #define CONTEXT_EXREG_XMM_OFFSET 160
+
+typedef struct _KNONVOLATILE_CONTEXT_POINTERS {
+
+    // TODO WIP x86/Linux, need to fix this.
+    PDWORD Ebx;
+    PDWORD Esi;
+    PDWORD Edi;
+    PDWORD Ebp;
+
+} KNONVOLATILE_CONTEXT_POINTERS, *PKNONVOLATILE_CONTEXT_POINTERS;
 
 #elif defined(_PPC_)
 
@@ -3304,6 +3299,8 @@ PALIMPORT BOOL PALAPI PAL_VirtualUnwindOutOfProc(CONTEXT *context,
 #define PAL_CS_NATIVE_DATA_SIZE 80
 #elif defined(__linux__) && defined(_ARM64_)
 #define PAL_CS_NATIVE_DATA_SIZE 116
+#elif defined(__linux__) && defined(__i386__)
+#define PAL_CS_NATIVE_DATA_SIZE 76
 #elif defined(__linux__) && defined(__x86_64__)
 #define PAL_CS_NATIVE_DATA_SIZE 96
 #elif defined(__NetBSD__) && defined(__amd64__)
@@ -4712,7 +4709,9 @@ enum {
 //
 typedef struct _RUNTIME_FUNCTION {
     DWORD BeginAddress;
+#ifdef _AMD64_
     DWORD EndAddress;
+#endif
     DWORD UnwindData;
 } RUNTIME_FUNCTION, *PRUNTIME_FUNCTION;
 
@@ -4801,28 +4800,6 @@ DebugBreak(
        VOID);
 
 PALIMPORT
-LPWSTR
-PALAPI
-lstrcatW(
-     IN OUT LPWSTR lpString1,
-     IN LPCWSTR lpString2);
-
-#ifdef UNICODE
-#define lstrcat lstrcatW
-#endif
-
-PALIMPORT
-LPWSTR
-PALAPI
-lstrcpyW(
-     OUT LPWSTR lpString1,
-     IN LPCWSTR lpString2);
-
-#ifdef UNICODE
-#define lstrcpy lstrcpyW
-#endif
-
-PALIMPORT
 int
 PALAPI
 lstrlenA(
@@ -4839,19 +4816,6 @@ lstrlenW(
 #else
 #define lstrlen lstrlenA
 #endif
-
-PALIMPORT
-LPWSTR
-PALAPI
-lstrcpynW(
-      OUT LPWSTR lpString1,
-      IN LPCWSTR lpString2,
-      IN int iMaxLength);
-
-#ifdef UNICODE
-#define lstrcpyn lstrcpynW
-#endif
-
 
 PALIMPORT
 DWORD
@@ -5791,6 +5755,13 @@ CoCreateGuid(OUT GUID * pguid);
 #define log           PAL_log
 #define log10         PAL_log10
 #define pow           PAL_pow
+#define acosf         PAL_acosf
+#define asinf         PAL_asinf
+#define atan2f        PAL_atan2f
+#define expf          PAL_expf
+#define logf          PAL_logf
+#define log10f        PAL_log10f
+#define powf          PAL_powf
 #define malloc        PAL_malloc
 #define free          PAL_free
 #define mkstemp       PAL_mkstemp
@@ -5900,23 +5871,34 @@ PALIMPORT int __cdecl toupper(int);
 
 #endif // PAL_STDCPP_COMPAT
 
+/* _TRUNCATE */
+#if !defined(_TRUNCATE)
+#define _TRUNCATE ((size_t)-1)
+#endif
+
 PALIMPORT errno_t __cdecl memcpy_s(void *, size_t, const void *, size_t);
 PALIMPORT errno_t __cdecl memmove_s(void *, size_t, const void *, size_t);
 PALIMPORT char * __cdecl _strlwr(char *);
 PALIMPORT int __cdecl _stricmp(const char *, const char *);
-PALIMPORT int __cdecl _snprintf(char *, size_t, const char *, ...);
+PALIMPORT int __cdecl vsprintf_s(char *, size_t, const char *, va_list);
 PALIMPORT char * __cdecl _gcvt_s(char *, int, double, int);
 PALIMPORT char * __cdecl _ecvt(double, int, int *, int *);
 PALIMPORT int __cdecl __iscsym(int);
-PALIMPORT size_t __cdecl _mbslen(const unsigned char *);
 PALIMPORT unsigned char * __cdecl _mbsinc(const unsigned char *);
 PALIMPORT unsigned char * __cdecl _mbsninc(const unsigned char *, size_t);
 PALIMPORT unsigned char * __cdecl _mbsdec(const unsigned char *, const unsigned char *);
 PALIMPORT int __cdecl _wcsicmp(const WCHAR *, const WCHAR*);
 PALIMPORT int __cdecl _wcsnicmp(const WCHAR *, const WCHAR *, size_t);
 PALIMPORT int __cdecl _vsnprintf(char *, size_t, const char *, va_list);
-PALIMPORT int __cdecl _vsnwprintf(WCHAR *, size_t, const WCHAR *, va_list);
-PALIMPORT WCHAR * __cdecl _itow(int, WCHAR *, int);
+PALIMPORT int __cdecl _vsnprintf_s(char *, size_t, size_t, const char *, va_list);
+PALIMPORT int __cdecl _vsnwprintf_s(WCHAR *, size_t, size_t, const WCHAR *, va_list);
+PALIMPORT int __cdecl _snwprintf_s(WCHAR *, size_t, size_t, const WCHAR *, ...);
+PALIMPORT int __cdecl _snprintf_s(char *, size_t, size_t, const char *, ...);
+PALIMPORT int __cdecl sprintf_s(char *, size_t, const char *, ... );
+PALIMPORT int __cdecl swprintf_s(WCHAR *, size_t, const WCHAR *, ... );
+PALIMPORT int __cdecl _snwprintf_s(WCHAR *, size_t, size_t, const WCHAR *, ...);
+PALIMPORT int __cdecl vswprintf_s( WCHAR *, size_t, const WCHAR *, va_list);
+PALIMPORT errno_t __cdecl _itow_s(int, WCHAR *, size_t, int);
 
 PALIMPORT size_t __cdecl PAL_wcslen(const WCHAR *);
 PALIMPORT int __cdecl PAL_wcscmp(const WCHAR*, const WCHAR*);
@@ -5934,7 +5916,6 @@ PALIMPORT size_t __cdecl PAL_wcscspn(const WCHAR *, const WCHAR *);
 PALIMPORT int __cdecl PAL_swprintf(WCHAR *, const WCHAR *, ...);
 PALIMPORT int __cdecl PAL_vswprintf(WCHAR *, const WCHAR *, va_list);
 PALIMPORT int __cdecl PAL__vsnprintf(LPSTR Buffer, size_t Count, LPCSTR Format, va_list ap);
-PALIMPORT int __cdecl _snwprintf(WCHAR *, size_t, const WCHAR *, ...);
 PALIMPORT int __cdecl PAL_swscanf(const WCHAR *, const WCHAR *, ...);
 PALIMPORT LONG __cdecl PAL_wcstol(const WCHAR *, WCHAR **, int);
 PALIMPORT ULONG __cdecl PAL_wcstoul(const WCHAR *, WCHAR **, int);
@@ -5951,8 +5932,7 @@ PALIMPORT WCHAR __cdecl PAL_towupper(WCHAR);
 
 PALIMPORT WCHAR * __cdecl _wcslwr(WCHAR *);
 PALIMPORT ULONGLONG _wcstoui64(const WCHAR *, WCHAR **, int);
-PALIMPORT WCHAR * __cdecl _i64tow(__int64, WCHAR *, int);
-PALIMPORT WCHAR * __cdecl _ui64tow(unsigned __int64, WCHAR *, int);
+PALIMPORT errno_t __cdecl _i64tow_s(long long, WCHAR *, size_t, int);
 PALIMPORT int __cdecl _wtoi(const WCHAR *);
 
 #ifdef __cplusplus
@@ -6040,9 +6020,29 @@ PALIMPORT double __cdecl sqrt(double);
 PALIMPORT double __cdecl tan(double);
 PALIMPORT double __cdecl tanh(double);
 
+PALIMPORT int __cdecl _finitef(float);
+PALIMPORT int __cdecl _isnanf(float);
+PALIMPORT float __cdecl _copysignf(float, float);
+PALIMPORT float __cdecl acosf(float);
+PALIMPORT float __cdecl asinf(float);
+PALIMPORT float __cdecl atanf(float);
+PALIMPORT float __cdecl atan2f(float, float);
+PALIMPORT float __cdecl ceilf(float);
+PALIMPORT float __cdecl cosf(float);
+PALIMPORT float __cdecl coshf(float);
+PALIMPORT float __cdecl expf(float);
 PALIMPORT float __cdecl fabsf(float);
+PALIMPORT float __cdecl floorf(float);
 PALIMPORT float __cdecl fmodf(float, float); 
+PALIMPORT float __cdecl logf(float);
+PALIMPORT float __cdecl log10f(float);
 PALIMPORT float __cdecl modff(float, float*);
+PALIMPORT float __cdecl powf(float, float);
+PALIMPORT float __cdecl sinf(float);
+PALIMPORT float __cdecl sinhf(float);
+PALIMPORT float __cdecl sqrtf(float);
+PALIMPORT float __cdecl tanf(float);
+PALIMPORT float __cdecl tanhf(float);
 
 #ifndef PAL_STDCPP_COMPAT
 
@@ -6087,13 +6087,7 @@ PALIMPORT void __cdecl qsort(void *, size_t, size_t, int (__cdecl *)(const void 
 PALIMPORT void * __cdecl bsearch(const void *, const void *, size_t, size_t,
 int (__cdecl *)(const void *, const void *));
 
-PALIMPORT void __cdecl _splitpath(const char *, char *, char *, char *, char *);
-PALIMPORT void __cdecl _wsplitpath(const WCHAR *, WCHAR *, WCHAR *, WCHAR *, WCHAR *);
-PALIMPORT void __cdecl _makepath(char *, const char *, const char *, const char *, const char *);
-PALIMPORT void __cdecl _wmakepath(WCHAR *, const WCHAR *, const WCHAR *, const WCHAR *, const WCHAR *);
 PALIMPORT char * __cdecl _fullpath(char *, const char *, size_t);
-
-PALIMPORT void __cdecl _swab(char *, char *, int);
 
 #ifndef PAL_STDCPP_COMPAT
 PALIMPORT time_t __cdecl time(time_t *);

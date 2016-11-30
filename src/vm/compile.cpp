@@ -1487,7 +1487,7 @@ void CEECompileInfo::CompressDebugInfo(
 
 HRESULT CEECompileInfo::GetBaseJitFlags(
         IN  CORINFO_METHOD_HANDLE   hMethod,
-        OUT DWORD                  *pFlags)
+        OUT CORJIT_FLAGS           *pFlags)
 {
     STANDARD_VM_CONTRACT;
 
@@ -6603,7 +6603,9 @@ void CEEPreloader::PrePrepareMethodIfNecessary(CORINFO_METHOD_HANDLE hMethod)
 {
     STANDARD_VM_CONTRACT;
 
+#ifdef FEATURE_CER
     ::PrePrepareMethodIfNecessary(hMethod);
+#endif
 }
 
 static void SetStubMethodDescOnInteropMethodDesc(MethodDesc* pInteropMD, MethodDesc* pStubMD, bool fReverseStub)
@@ -6680,9 +6682,9 @@ MethodDesc * CEEPreloader::CompileMethodStubIfNeeded(
     {
         if (!pStubMD->AsDynamicMethodDesc()->GetILStubResolver()->IsCompiled())
         {
-            DWORD dwJitFlags = pStubMD->AsDynamicMethodDesc()->GetILStubResolver()->GetJitFlags();
+            CORJIT_FLAGS jitFlags = pStubMD->AsDynamicMethodDesc()->GetILStubResolver()->GetJitFlags();
 
-            pfnCallback(pCallbackContext, (CORINFO_METHOD_HANDLE)pStubMD, dwJitFlags);
+            pfnCallback(pCallbackContext, (CORINFO_METHOD_HANDLE)pStubMD, jitFlags);
         }
 
 #ifndef FEATURE_FULL_NGEN // Deduplication

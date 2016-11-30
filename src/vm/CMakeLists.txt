@@ -117,7 +117,6 @@ set(VM_SOURCES_DAC_AND_WKS_COMMON
     virtualcallstub.cpp
     win32threadpool.cpp
     zapsig.cpp
-    ${VM_SOURCES_GDBJIT}
 )
 
 if(FEATURE_READYTORUN)
@@ -156,7 +155,6 @@ set(VM_SOURCES_WKS
     comthreadpool.cpp
     comutilnative.cpp
     comwaithandle.cpp
-    constrainedexecutionregion.cpp
     coverage.cpp
     customattribute.cpp
     custommarshalerinfo.cpp
@@ -173,7 +171,6 @@ set(VM_SOURCES_WKS
     frameworkexceptionloader.cpp
     gccover.cpp
     gcenv.ee.cpp
-    gcenv.os.cpp
     gchelpers.cpp
     genmeth.cpp
     hosting.cpp
@@ -241,13 +238,26 @@ set(VM_SOURCES_WKS
     typeparse.cpp
     verifier.cpp
     weakreferencenative.cpp
+    ${VM_SOURCES_GDBJIT}
 )
+
+if(FEATURE_CER)
+    list(APPEND VM_SOURCES_WKS
+        constrainedexecutionregion.cpp
+        )
+endif(FEATURE_CER)
 
 if(FEATURE_EVENT_TRACE)
     list(APPEND VM_SOURCES_WKS
         eventtrace.cpp
         )
 endif(FEATURE_EVENT_TRACE)
+
+if(NOT FEATURE_STANDALONE_GC)
+    list(APPEND VM_SOURCES_WKS
+        gcenv.os.cpp
+        )
+endif(NOT FEATURE_STANDALONE_GC)
 
 if(WIN32)
 

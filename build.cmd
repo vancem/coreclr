@@ -1,6 +1,7 @@
 @if not defined _echo @echo off
 setlocal EnableDelayedExpansion EnableExtensions
 
+echo Starting Build at %TIME%
 set __ThisScriptFull="%~f0"
 set __VSToolsRoot=%VS140COMNTOOLS%
 :: Note that the msbuild project files (specifically, dir.proj) will use the following variables, if set:
@@ -51,6 +52,7 @@ set __BuildTypeDebug=0
 set __BuildTypeChecked=0
 set __BuildTypeRelease=0
 set __BuildJit32="-DBUILD_JIT32=0"
+set __BuildStandaloneGC="-DFEATURE_STANDALONE_GC=0"
 
 set __PgoInstrument=0
 
@@ -107,7 +109,12 @@ if /i "%1" == "usenmakemakefiles"   (set __NMakeMakefiles=1&set __ConfigureOnly=
 if /i "%1" == "buildjit32"          (set __BuildJit32="-DBUILD_JIT32=1"&set processedArgs=!processedArgs! %1&shift&goto Arg_Loop)
 if /i "%1" == "pgoinstrument"       (set __PgoInstrument=1&set processedArgs=!processedArgs! %1&shift&goto Arg_Loop)
 if /i "%1" == "toolset_dir"         (set __ToolsetDir=%2&set __PassThroughArgs=%__PassThroughArgs% %2&set processedArgs=!processedArgs! %1 %2&shift&shift&goto Arg_Loop)
-if /i "%1" == "altjitcrossgen"      (set __AltJitCrossgen=1&set processedArgs=!processedArgs! %1&shift&goto Arg_Loop)
+if /i "%1" == "compatjitcrossgen"   (set __CompatJitCrossgen=1&set processedArgs=!processedArgs! %1&shift&goto Arg_Loop)
+if /i "%1" == "legacyjitcrossgen"   (set __LegacyJitCrossgen=1&set processedArgs=!processedArgs! %1&shift&goto Arg_Loop)
+if /i "%1" == "buildstandalonegc"   (set __BuildStandaloneGC="-DFEATURE_STANDALONE_GC=1"&set processedArgs=!processedArgs! %1&shift&goto Arg_Loop)
+
+@REM The following can be deleted once the CI system that passes it is updated to not pass it.
+if /i "%1" == "altjitcrossgen"      (set processedArgs=!processedArgs! %1&shift&goto Arg_Loop)
 
 if [!processedArgs!]==[] (
   call set __UnprocessedBuildArgs=!__args!
@@ -221,7 +228,13 @@ if %__BuildNative% EQU 1 (
     :: Set the environment for the native build
     set __VCBuildArch=x86_amd64
     if /i "%__BuildArch%" == "x86" ( set __VCBuildArch=x86 )
-    if /i "%__BuildArch%" == "arm" (set __VCBuildArch=x86_arm)
+    if /i "%__BuildArch%" == "arm" (
+        set __VCBuildArch=x86_arm
+        
+        REM Make CMake pick the highest installed version in the 10.0.* range
+        set ___SDKVersion="-DCMAKE_SYSTEM_VERSION=10.0"
+    )
+
     echo %__MsgPrefix%Using environment: "%__VSToolsRoot%\..\..\VC\vcvarsall.bat" !__VCBuildArch!
     call                                 "%__VSToolsRoot%\..\..\VC\vcvarsall.bat" !__VCBuildArch!
 	@if defined _echo @echo on
@@ -231,14 +244,15 @@ if %__BuildNative% EQU 1 (
         exit /b 1
     )
     if not exist "!VSINSTALLDIR!DIA SDK" goto NoDIA
+
 :GenVSSolution
     if defined __SkipConfigure goto SkipConfigure
 
     echo %__MsgPrefix%Regenerating the Visual Studio solution
 
     pushd "%__IntermediatesDir%"
-    set __ExtraCmakeArgs="-DCLR_CMAKE_TARGET_OS=%__BuildOs%" "-DCLR_CMAKE_PACKAGES_DIR=%__PackagesDir%" "-DCLR_CMAKE_PGO_INSTRUMENT=%__PgoInstrument%"
-    call "%__SourceDir%\pal\tools\gen-buildsys-win.bat" "%__ProjectDir%" %__VSVersion% %__BuildArch% %__BuildJit32% !__ExtraCmakeArgs!
+    set __ExtraCmakeArgs=!___SDKVersion! "-DCLR_CMAKE_TARGET_OS=%__BuildOs%" "-DCLR_CMAKE_PACKAGES_DIR=%__PackagesDir%" "-DCLR_CMAKE_PGO_INSTRUMENT=%__PgoInstrument%"
+    call "%__SourceDir%\pal\tools\gen-buildsys-win.bat" "%__ProjectDir%" %__VSVersion% %__BuildArch% %__BuildJit32% %__BuildStandaloneGC% !__ExtraCmakeArgs!
 	@if defined _echo @echo on
     popd
 :SkipConfigure
@@ -359,7 +373,17 @@ set PATH=%PATH%;%WinDir%\Microsoft.Net\Framework64\V4.0.30319;%WinDir%\Microsoft
 
 if %__BuildNativeCoreLib% EQU 1 (
     echo %__MsgPrefix%Generating native image of System.Private.CoreLib for %__BuildOS%.%__BuildArch%.%__BuildType%
-	
+
+    if "%__CompatJitCrossgen%"=="1" (
+        set COMPlus_UseWindowsX86CoreLegacyJit=1
+    )
+
+    if "%__LegacyJitCrossgen%"=="1" (
+        set COMPlus_AltJit=*
+        set COMPlus_AltJitNgen=*
+        set COMPlus_AltJitName=legacyjit.dll
+    )
+
     echo "%__CrossgenExe%" /Platform_Assemblies_Paths "%__BinDir%" /out "%__BinDir%\System.Private.CoreLib.ni.dll" "%__BinDir%\System.Private.CoreLib.dll"
     "%__CrossgenExe%" /Platform_Assemblies_Paths "%__BinDir%" /out "%__BinDir%\System.Private.CoreLib.ni.dll" "%__BinDir%\System.Private.CoreLib.dll" > "%__CrossGenCoreLibLog%" 2>&1
     if NOT !errorlevel! == 0 (
@@ -379,15 +403,15 @@ if %__BuildNativeCoreLib% EQU 1 (
     set "__CrossGenCoreLibLog=%__LogsDir%\CrossgenMSCoreLib_%__BuildOS%__%__BuildArch%__%__BuildType%.log"
     set "__CrossgenExe=%__CrossComponentBinDir%\crossgen.exe"
 
-    if "%__AltJitCrossgen%"=="1" (
-        set COMPlus_AltJitNgen=*
-        set COMPlus_AltJitName=protojit.dll
-    )
-
     "!__CrossgenExe!" /Platform_Assemblies_Paths "%__BinDir%" /out "%__BinDir%\mscorlib.ni.dll" "%__BinDir%\mscorlib.dll" > "!__CrossGenCoreLibLog!" 2>&1
     set err=!errorlevel!
 
-    if "%__AltJitCrossgen%"=="1" (
+    if "%__CompatJitCrossgen%"=="1" (
+        set COMPlus_UseWindowsX86CoreLegacyJit=
+    )
+
+    if "%__LegacyJitCrossgen%"=="1" (
+        set COMPlus_AltJit=
         set COMPlus_AltJitNgen=
         set COMPlus_AltJitName=
     )
@@ -448,7 +472,7 @@ REM === All builds complete!
 REM ===
 REM =========================================================================================
 
-echo %__MsgPrefix%Repo successfully built.
+echo %__MsgPrefix%Repo successfully built.  Finished at %TIME%
 echo %__MsgPrefix%Product binaries are available at !__BinDir!
 if %__BuildTests% EQU 1 (
     echo %__MsgPrefix%Test binaries are available at !__TestBinDir!

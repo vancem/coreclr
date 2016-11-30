@@ -26,7 +26,16 @@ namespace System.Globalization
         private void InitSort(CultureInfo culture)
         {
             _sortName = culture.SortName;
-            _sortHandle = Interop.GlobalizationInterop.GetSortHandle(GetNullTerminatedUtf8String(_sortName));
+            Interop.GlobalizationInterop.ResultCode resultCode = Interop.GlobalizationInterop.GetSortHandle(GetNullTerminatedUtf8String(_sortName), out _sortHandle); 
+            if (resultCode != Interop.GlobalizationInterop.ResultCode.Success)
+            {
+                _sortHandle.Dispose();
+                
+                if (resultCode == Interop.GlobalizationInterop.ResultCode.OutOfMemory)
+                    throw new OutOfMemoryException();
+                
+                throw new ExternalException(SR.Arg_ExternalException);
+            }
             _isAsciiEqualityOrdinal = (_sortName == "en-US" || _sortName == "");
         }
 
@@ -241,12 +250,12 @@ namespace System.Globalization
         
         private unsafe SortKey CreateSortKey(String source, CompareOptions options)
         {
-            if (source==null) { throw new ArgumentNullException("source"); }
+            if (source==null) { throw new ArgumentNullException(nameof(source)); }
             Contract.EndContractBlock();
 
             if ((options & ValidSortkeyCtorMaskOffFlags) != 0)
             {
-                throw new ArgumentException(Environment.GetResourceString("Argument_InvalidFlag"), "options");
+                throw new ArgumentException(Environment.GetResourceString("Argument_InvalidFlag"), nameof(options));
             }
             
             byte [] keyData;
@@ -372,6 +381,16 @@ namespace System.Globalization
             Contract.Assert(bytesWritten == byteLen);
 
             return buffer;
+        }
+        
+        private SortVersion GetSortVersion()
+        {
+            int sortVersion = Interop.GlobalizationInterop.GetSortVersion();
+            return new SortVersion(sortVersion, LCID, new Guid(sortVersion, 0, 0, 0, 0, 0, 0,
+                                                             (byte) (LCID >> 24),
+                                                             (byte) ((LCID  & 0x00FF0000) >> 16),
+                                                             (byte) ((LCID  & 0x0000FF00) >> 8),
+                                                             (byte) (LCID  & 0xFF)));
         }
     }
 }
