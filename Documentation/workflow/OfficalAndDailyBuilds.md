@@ -18,40 +18,36 @@ repositories.  You can see what is available from
 Thus if your goal is just to get the latest bug fixes and features, you don't need to build CoreCLR yourself you 
 can simply add <https://dotnet.myget.org/F/dotnet-core/api/v3/index.json> to your Nuget Feed list. 
 
-## Package Version Numbers
-
-Version numbers for Nuget packages look like the following
+The version numbers for the releases following the pattern 
 ```
-    1.0.24214.01
+    <major>.<minor>.<buildNumberMajor>-<buildNumberMinor>
 ```
-Which have the form
-```
-    <major>.<minor>.<buildNumberMajor>.<buildNumberMinor>
-```
+See [Version Numbers](VersionNumbers.md) for more on the meaning of version numbers.  
 
-* The major version number represents a compatibility band.   If the next release of the package is not
-  backward compatible (most apps that run on version N-1 will run on version N) then this number is increased.
-  This number is not likely to change (we care about compatibility alot)  
+# Using the Official or Daily Builds.   
 
-* The minor number is increased every time interesting new features are added (not just minor bug fixes).
-  For CoreCLR we tend to update this every time we create a public release (every 3 months).  
+Using offiical or Daily builds works very much like using the Nuget package that you build locally.  
+See [Using your .NET Core Build](UsingYourBuild.md) for those instructions.   The only differences are 
 
-* The Major Build Number is a number that represents a daily build.   The last 2 digits of this build number
-  is the **day of the month** of the GIT commit that is being built.   Thus we know in the example above this 
-  build's last commit to GIT happened on the 14th day of the month.   The most significant digits represents
-  the month count since April 1996.   In the example above 242 represents Jun 2016.   
+ 1. You use the version of the official or Daily build you are interested in in your project.json for 
+ Microsoft.NETCore.Runtime.CoreCLR.  
+ 2. For official builds, the appropriate Nuget feed is <https://api.nuget.org/v3/index.json> and should
+ be in your Nuget.Config file already.   However for daily Build the appropriate Nuget Feed is from myget
+ and so you need to add https://dotnet.myget.org/F/dotnet-core/api/v3/index.json as one of the Nuget
 
-* The Minor Build number is something that disambiguates different builds that share the same 
-  commit (or the different commits on the same day).   It is a sequential number and is typically 1 for
-  official builds, and 0 for developer builds.   (You can set the environment variable BuildNumberMinor if
-  you wish to set it for your own builds).  
+ ## Symbols for Official and Daily Builds
 
-  
+In order to debug builds, you need to have access to the symbol files (PEBs on Windows, Dwarf files on Unix)
+that the debuggers and profilers need.   The Official and Daily builds folllow Nuget Standards for publishing 
+symbol files by creating *.symbols.nupkg files.   When these are uploaded to the Nuget Feeds, the Nuget 
+feed on Windows the Nuget servers will also act as a symbol server for any PDBs in these *.symbols.nupkg files
+Thus on Windows OS you should add the following paths to your _NT_SYMBOL_PATH variable for your debuggers to
+find the necessary files
 
-See the [Package and File Versioning](https://github.com/dotnet/corefx/blob/master/Documentation/building/versioning.md) page
-for more details on how the build version number is generated.   
+  * `SRV*C:\Users\vancem\AppData\Local\Temp\symbols*https://nuget.smbsrc.net` for official releases of .NET Core.
+  * `SRV*C:\Users\vancem\AppData\Local\Temp\symbols*https://dotnet.myget.org/F/dotnet-core/symbols` for daily releases of .NET Core. 
 
-
+ search locations.  
 
 # Build/Test Status of the repository
 
