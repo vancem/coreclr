@@ -518,26 +518,26 @@ struct BasicBlock : private LIR::Range
 
     weight_t bbWeight; // The dynamic execution weight of this block
 
-    // getBBWeight -- get the normalized weight of this block
-    unsigned getBBWeight(Compiler* comp);
+    // getCalledCount -- get the value used to normalize weights for this method
+    weight_t getCalledCount(Compiler* comp);
 
-    // setBBWeight -- if the block weight is not derived from a profile, then set the weight to the input
-    // weight, but make sure to not overflow BB_MAX_WEIGHT
-    void setBBWeight(unsigned weight)
+    // getBBWeight -- get the normalized weight of this block
+    weight_t getBBWeight(Compiler* comp);
+
+    // hasProfileWeight -- Returns true if this block's weight came from profile data
+    bool hasProfileWeight() const
     {
-        if (!(this->bbFlags & BBF_PROF_WEIGHT))
-        {
-            this->bbWeight = min(weight, BB_MAX_WEIGHT);
-        }
+        return ((this->bbFlags & BBF_PROF_WEIGHT) != 0);
     }
 
-    // modifyBBWeight -- same as setBBWeight, but also make sure that if the block is rarely run, it stays that
-    // way, and if it's not rarely run then its weight never drops below 1.
-    void modifyBBWeight(unsigned weight)
+    // setBBWeight -- if the block weight is not derived from a profile,
+    // then set the weight to the input weight, making sure to not overflow BB_MAX_WEIGHT
+    // Note to set the weight from profile data, instead use setBBProfileWeight
+    void setBBWeight(weight_t weight)
     {
-        if (this->bbWeight != BB_ZERO_WEIGHT)
+        if (!hasProfileWeight())
         {
-            setBBWeight(max(weight, 1));
+            this->bbWeight = min(weight, BB_MAX_WEIGHT);
         }
     }
 
@@ -545,8 +545,17 @@ struct BasicBlock : private LIR::Range
     void setBBProfileWeight(unsigned weight)
     {
         this->bbFlags |= BBF_PROF_WEIGHT;
-        // Check if the multiplication by BB_UNITY_WEIGHT will overflow.
-        this->bbWeight = (weight <= BB_MAX_WEIGHT / BB_UNITY_WEIGHT) ? weight * BB_UNITY_WEIGHT : BB_MAX_WEIGHT;
+        this->bbWeight = weight;
+    }
+
+    // modifyBBWeight -- same as setBBWeight, but also make sure that if the block is rarely run, it stays that
+    // way, and if it's not rarely run then its weight never drops below 1.
+    void modifyBBWeight(weight_t weight)
+    {
+        if (this->bbWeight != BB_ZERO_WEIGHT)
+        {
+            setBBWeight(max(weight, 1));
+        }
     }
 
     // this block will inherit the same weight and relevant bbFlags as bSrc
@@ -554,7 +563,7 @@ struct BasicBlock : private LIR::Range
     {
         this->bbWeight = bSrc->bbWeight;
 
-        if (bSrc->bbFlags & BBF_PROF_WEIGHT)
+        if (bSrc->hasProfileWeight())
         {
             this->bbFlags |= BBF_PROF_WEIGHT;
         }
@@ -941,12 +950,6 @@ struct BasicBlock : private LIR::Range
         EXPSET_TP bbCseGen; // CSEs computed by block
 #if ASSERTION_PROP
         ASSERT_TP bbAssertionGen; // value assignments computed by block
-#endif
-    };
-
-    union {
-#if ASSERTION_PROP
-        ASSERT_TP bbAssertionKill; // value assignments killed   by block
 #endif
     };
 

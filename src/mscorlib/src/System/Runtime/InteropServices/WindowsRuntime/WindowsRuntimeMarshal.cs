@@ -802,8 +802,7 @@ namespace System.Runtime.InteropServices.WindowsRuntime
             {
             }
 
-            /// I borrowed Vance's reader writer lock implementation from his blog as ReaderWriterLockSlim is
-            /// available in System.Core.dll!
+            /// Discussed @ https://blogs.msdn.microsoft.com/vancem/2006/03/29/analysis-of-reader-writer-lock/
             ///
             /// <summary>
             /// A reader-writer lock implementation that is intended to be simple, yet very
@@ -1055,13 +1054,13 @@ namespace System.Runtime.InteropServices.WindowsRuntime
                 string message = innerException.Message;
                 if (message == null && messageResource != null)
                 {
-                    message = Environment.GetResourceString(messageResource);
+                    message = SR.GetResourceString(messageResource);
                 }
                 e = new Exception(message, innerException);
             }
             else
             {
-                string message = (messageResource != null ? Environment.GetResourceString(messageResource) : null);
+                string message = (messageResource != null ? SR.GetResourceString(messageResource): null);
                 e = new Exception(message);
             }
 
@@ -1235,7 +1234,7 @@ namespace System.Runtime.InteropServices.WindowsRuntime
         public static IntPtr StringToHString(String s)
         {
             if (!Environment.IsWinRTSupported)
-                throw new PlatformNotSupportedException(Environment.GetResourceString("PlatformNotSupported_WinRT"));
+                throw new PlatformNotSupportedException(SR.PlatformNotSupported_WinRT);
 
             if (s == null)
                 throw new ArgumentNullException(nameof(s));
@@ -1253,7 +1252,7 @@ namespace System.Runtime.InteropServices.WindowsRuntime
         {
             if (!Environment.IsWinRTSupported)
             {
-                throw new PlatformNotSupportedException(Environment.GetResourceString("PlatformNotSupported_WinRT"));
+                throw new PlatformNotSupportedException(SR.PlatformNotSupported_WinRT);
             }
 
             return HStringToString(ptr);
@@ -1262,7 +1261,7 @@ namespace System.Runtime.InteropServices.WindowsRuntime
         public static void FreeHString(IntPtr ptr)
         {
             if (!Environment.IsWinRTSupported)
-                throw new PlatformNotSupportedException(Environment.GetResourceString("PlatformNotSupported_WinRT"));
+                throw new PlatformNotSupportedException(SR.PlatformNotSupported_WinRT);
 
             if (ptr != IntPtr.Zero)
             {

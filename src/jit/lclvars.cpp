@@ -249,10 +249,17 @@ void Compiler::lvaInitTypeRef()
         CORINFO_CLASS_HANDLE typeHnd;
         CorInfoTypeWithMod   corInfoType =
             info.compCompHnd->getArgType(&info.compMethodInfo->locals, localsSig, &typeHnd);
+
         lvaInitVarDsc(varDsc, varNum, strip(corInfoType), typeHnd, localsSig, &info.compMethodInfo->locals);
 
         varDsc->lvPinned  = ((corInfoType & CORINFO_TYPE_MOD_PINNED) != 0);
         varDsc->lvOnFrame = true; // The final home for this local variable might be our local stack frame
+
+        if (strip(corInfoType) == CORINFO_TYPE_CLASS)
+        {
+            CORINFO_CLASS_HANDLE clsHnd = info.compCompHnd->getArgClass(&info.compMethodInfo->locals, localsSig);
+            lvaSetClass(varNum, clsHnd);
+        }
     }
 
     if ( // If there already exist unsafe buffers, don't mark more structs as unsafe
@@ -398,6 +405,7 @@ void Compiler::lvaInitThisPtr(InitVarDscInfo* varDscInfo)
         else
         {
             varDsc->lvType = TYP_REF;
+            lvaSetClass(varDscInfo->varNum, info.compClassHnd);
         }
 
         if (tiVerificationNeeded)
@@ -551,6 +559,12 @@ void Compiler::lvaInitUserArgs(InitVarDscInfo* varDscInfo)
 #endif
 
         lvaInitVarDsc(varDsc, varDscInfo->varNum, strip(corInfoType), typeHnd, argLst, &info.compMethodInfo->args);
+
+        if (strip(corInfoType) == CORINFO_TYPE_CLASS)
+        {
+            CORINFO_CLASS_HANDLE clsHnd = info.compCompHnd->getArgClass(&info.compMethodInfo->args, argLst);
+            lvaSetClass(varDscInfo->varNum, clsHnd);
+        }
 
         // For ARM, ARM64, and AMD64 varargs, all arguments go in integer registers
         var_types argType     = mangleVarArgsType(varDsc->TypeGet());
@@ -2284,6 +2298,171 @@ void Compiler::lvaSetStruct(unsigned varNum, CORINFO_CLASS_HANDLE typeHnd, bool 
     }
 }
 
+//------------------------------------------------------------------------
+// lvaSetClass: set class information for a local var.
+//
+// Arguments:
+//    varNum -- number of the variable
+//    clsHnd -- class handle to use in set or update
+//    isExact -- true if class is known exactly
+//
+// Notes:
+//    varNum must not already have a ref class handle.
+
+void Compiler::lvaSetClass(unsigned varNum, CORINFO_CLASS_HANDLE clsHnd, bool isExact)
+{
+    noway_assert(varNum < lvaCount);
+    assert(clsHnd != nullptr);
+
+    LclVarDsc* varDsc = &lvaTable[varNum];
+    assert(varDsc->lvType == TYP_REF);
+
+    // We shoud not have any ref type information for this var.
+    assert(varDsc->lvClassHnd == nullptr);
+    assert(!varDsc->lvClassIsExact);
+
+    JITDUMP("\nlvaSetClass: setting class for V%02i to (%p) %s %s\n", varNum, clsHnd,
+            info.compCompHnd->getClassName(clsHnd), isExact ? " [exact]" : "");
+
+    varDsc->lvClassHnd     = clsHnd;
+    varDsc->lvClassIsExact = isExact;
+}
+
+//------------------------------------------------------------------------
+// lvaSetClass: set class information for a local var from a tree or stack type
+//
+// Arguments:
+//    varNum -- number of the variable. Must be a single def local
+//    tree  -- tree establishing the variable's value
+//    stackHnd -- handle for the type from the evaluation stack
+//
+// Notes:
+//    Preferentially uses the tree's type, when available. Since not all
+//    tree kinds can track ref types, the stack type is used as a
+//    fallback.
+
+void Compiler::lvaSetClass(unsigned varNum, GenTreePtr tree, CORINFO_CLASS_HANDLE stackHnd)
+{
+    bool                 isExact   = false;
+    bool                 isNonNull = false;
+    CORINFO_CLASS_HANDLE clsHnd    = gtGetClassHandle(tree, &isExact, &isNonNull);
+
+    if (clsHnd != nullptr)
+    {
+        lvaSetClass(varNum, clsHnd, isExact);
+    }
+    else if (stackHnd != nullptr)
+    {
+        lvaSetClass(varNum, stackHnd);
+    }
+}
+
+//------------------------------------------------------------------------
+// lvaUpdateClass: update class information for a local var.
+//
+// Arguments:
+//    varNum -- number of the variable
+//    clsHnd -- class handle to use in set or update
+//    isExact -- true if class is known exactly
+//
+// Notes:
+//
+//    This method models the type update rule for an assignment.
+//
+//    Updates currently should only happen for single-def user args or
+//    locals, when we are processing the expression actually being
+//    used to initialize the local (or inlined arg). The update will
+//    change the local from the declared type to the type of the
+//    initial value.
+//
+//    These updates should always *improve* what we know about the
+//    type, that is making an inexact type exact, or changing a type
+//    to some subtype. However the jit lacks precise type information
+//    for shared code, so ensuring this is so is currently not
+//    possible.
+
+void Compiler::lvaUpdateClass(unsigned varNum, CORINFO_CLASS_HANDLE clsHnd, bool isExact)
+{
+    noway_assert(varNum < lvaCount);
+    assert(clsHnd != nullptr);
+
+    LclVarDsc* varDsc = &lvaTable[varNum];
+    assert(varDsc->lvType == TYP_REF);
+
+    // We should already have a class
+    assert(varDsc->lvClassHnd != nullptr);
+
+    // This should be the first and only update for this var
+    assert(!varDsc->lvClassInfoUpdated);
+
+#if defined(DEBUG)
+    // This counts as an update, even if nothing changes.
+    varDsc->lvClassInfoUpdated = true;
+#endif // defined(DEBUG)
+
+    // If previous type was exact, there is nothing to update.  Would
+    // like to verify new type is compatible but can't do this yet.
+    if (varDsc->lvClassIsExact)
+    {
+        return;
+    }
+
+    // Are we updating the type?
+    if (varDsc->lvClassHnd != clsHnd)
+    {
+        JITDUMP("\nlvaUpdateClass: Updating class for V%02i from (%p) %s to (%p) %s %s\n", varNum, varDsc->lvClassHnd,
+                info.compCompHnd->getClassName(varDsc->lvClassHnd), clsHnd, info.compCompHnd->getClassName(clsHnd),
+                isExact ? " [exact]" : "");
+
+        varDsc->lvClassHnd     = clsHnd;
+        varDsc->lvClassIsExact = isExact;
+        return;
+    }
+
+    // Class info matched. Are we updating exactness?
+    if (isExact)
+    {
+        JITDUMP("\nlvaUpdateClass: Updating class for V%02i (%p) %s to be exact\n", varNum, varDsc->lvClassHnd,
+                info.compCompHnd->getClassName(varDsc->lvClassHnd));
+
+        varDsc->lvClassIsExact = isExact;
+        return;
+    }
+
+    // Else we have the same handle and (in)exactness as before. Do nothing.
+    return;
+}
+
+//------------------------------------------------------------------------
+// lvaUpdateClass: Uupdate class information for a local var from a tree
+//  or stack type
+//
+// Arguments:
+//    varNum -- number of the variable. Must be a single def local
+//    tree  -- tree establishing the variable's value
+//    stackHnd -- handle for the type from the evaluation stack
+//
+// Notes:
+//    Preferentially uses the tree's type, when available. Since not all
+//    tree kinds can track ref types, the stack type is used as a
+//    fallback.
+
+void Compiler::lvaUpdateClass(unsigned varNum, GenTreePtr tree, CORINFO_CLASS_HANDLE stackHnd)
+{
+    bool                 isExact   = false;
+    bool                 isNonNull = false;
+    CORINFO_CLASS_HANDLE clsHnd    = gtGetClassHandle(tree, &isExact, &isNonNull);
+
+    if (clsHnd != nullptr)
+    {
+        lvaUpdateClass(varNum, clsHnd, isExact);
+    }
+    else if (stackHnd != nullptr)
+    {
+        lvaUpdateClass(varNum, stackHnd);
+    }
+}
+
 /*****************************************************************************
  * Returns the array of BYTEs containing the GC layout information
  */
@@ -2381,8 +2560,41 @@ unsigned Compiler::lvaLclExactSize(unsigned varNum)
     return genTypeSize(varType);
 }
 
+// getCalledCount -- get the value used to normalized weights for this method
+//  if we don't have profile data then getCalledCount will return BB_UNITY_WEIGHT (100)
+//  otherwise it returns the number of times that profile data says the method was called.
+//
+BasicBlock::weight_t BasicBlock::getCalledCount(Compiler* comp)
+{
+    // when we don't have profile data then fgCalledCount will be BB_UNITY_WEIGHT (100)
+    BasicBlock::weight_t calledCount = comp->fgCalledCount;
+
+    // If we haven't yet reach the place where we setup fgCalledCount it could still be zero
+    // so return a reasonable value to use until we set it.
+    //
+    if (calledCount == 0)
+    {
+        if (comp->fgIsUsingProfileWeights())
+        {
+            // When we use profile data block counts we have exact counts,
+            // not multiples of BB_UNITY_WEIGHT (100)
+            calledCount = 1;
+        }
+        else
+        {
+            calledCount = comp->fgFirstBB->bbWeight;
+
+            if (calledCount == 0)
+            {
+                calledCount = BB_UNITY_WEIGHT;
+            }
+        }
+    }
+    return calledCount;
+}
+
 // getBBWeight -- get the normalized weight of this block
-unsigned BasicBlock::getBBWeight(Compiler* comp)
+BasicBlock::weight_t BasicBlock::getBBWeight(Compiler* comp)
 {
     if (this->bbWeight == 0)
     {
@@ -2390,22 +2602,50 @@ unsigned BasicBlock::getBBWeight(Compiler* comp)
     }
     else
     {
-        unsigned calledWeight = comp->fgCalledWeight;
-        if (calledWeight == 0)
-        {
-            calledWeight = comp->fgFirstBB->bbWeight;
-            if (calledWeight == 0)
-            {
-                calledWeight = BB_UNITY_WEIGHT;
-            }
-        }
+        weight_t calledCount = getCalledCount(comp);
+
+        // Normalize the bbWeights by multiplying by BB_UNITY_WEIGHT and dividing by the calledCount.
+        //
+        // 1. For methods that do not have IBC data the called weight will always be 100 (BB_UNITY_WEIGHT)
+        //     and the entry point bbWeight value is almost always 100 (BB_UNITY_WEIGHT)
+        // 2.  For methods that do have IBC data the called weight is the actual number of calls
+        //     from the IBC data and the entry point bbWeight value is almost always the actual
+        //     number of calls from the IBC data.
+        //
+        // "almost always" - except for the rare case where a loop backedge jumps to BB01
+        //
+        // We also perform a rounding operation by adding half of the 'calledCount' before performing
+        // the division.
+        //
+        // Thus for both cases we will return 100 (BB_UNITY_WEIGHT) for the entry point BasicBlock
+        //
+        // Note that with a 100 (BB_UNITY_WEIGHT) values between 1 and 99 represent decimal fractions.
+        // (i.e. 33 represents 33% and 75 represents 75%, and values greater than 100 require
+        //  some kind of loop backedge)
+        //
+
         if (this->bbWeight < (BB_MAX_WEIGHT / BB_UNITY_WEIGHT))
         {
-            return max(1, (((this->bbWeight * BB_UNITY_WEIGHT) + (calledWeight / 2)) / calledWeight));
+            // Calculate the result using unsigned arithmetic
+            weight_t result = ((this->bbWeight * BB_UNITY_WEIGHT) + (calledCount / 2)) / calledCount;
+
+            // We don't allow a value of zero, as that would imply rarely run
+            return max(1, result);
         }
         else
         {
-            return (unsigned)((((double)this->bbWeight * (double)BB_UNITY_WEIGHT) / (double)calledWeight) + 0.5);
+            // Calculate the full result using floating point
+            double fullResult = ((double)this->bbWeight * (double)BB_UNITY_WEIGHT) / (double)calledCount;
+
+            if (fullResult < (double)BB_MAX_WEIGHT)
+            {
+                // Add 0.5 and truncate to unsigned
+                return (weight_t)(fullResult + 0.5);
+            }
+            else
+            {
+                return BB_MAX_WEIGHT;
+            }
         }
     }
 }
@@ -2686,7 +2926,7 @@ int __cdecl Compiler::RefCntCmp(const void* op1, const void* op2)
         }
         if (varTypeIsGC(dsc2->TypeGet()))
         {
-            weight1 += BB_UNITY_WEIGHT / 2;
+            weight2 += BB_UNITY_WEIGHT / 2;
         }
 
         if (dsc2->lvRegister)
@@ -3022,6 +3262,10 @@ void Compiler::lvaSortByRefCount()
 #ifdef JIT32_GCENCODER
             lvaSetVarDoNotEnregister(lclNum DEBUGARG(DNER_PinningRef));
 #endif
+        }
+        else if (opts.MinOpts() && !JitConfig.JitMinOptsTrackGCrefs() && varTypeIsGC(varDsc->TypeGet()))
+        {
+            varDsc->lvTracked = 0;
         }
 
         //  Are we not optimizing and we have exception handlers?
@@ -5948,10 +6192,14 @@ void Compiler::lvaAlignFrame()
         }
 
         // Align the stack with STACK_ALIGN value.
-        int adjustFrameSize = compLclFrameSize;
+        int  adjustFrameSize = compLclFrameSize;
 #if defined(UNIX_X86_ABI)
+        bool isEbpPushed     = codeGen->isFramePointerUsed();
+#if DOUBLE_ALIGN
+        isEbpPushed |= genDoubleAlign();
+#endif
         // we need to consider spilled register(s) plus return address and/or EBP
-        int adjustCount = compCalleeRegsPushed + 1 + (codeGen->isFramePointerUsed() ? 1 : 0);
+        int adjustCount = compCalleeRegsPushed + 1 + (isEbpPushed ? 1 : 0);
         adjustFrameSize += (adjustCount * REGSIZE_BYTES) % STACK_ALIGN;
 #endif
         if ((adjustFrameSize % STACK_ALIGN) != 0)
@@ -5981,11 +6229,15 @@ void Compiler::lvaAssignFrameOffsetsToPromotedStructs()
         //
         if (varDsc->lvIsStructField
 #ifndef UNIX_AMD64_ABI
+#if !defined(_TARGET_ARM_) || defined(LEGACY_BACKEND)
+            // Non-legacy ARM: lo/hi parts of a promoted long arg need to be updated.
+
             // For System V platforms there is no outgoing args space.
             // A register passed struct arg is homed on the stack in a separate local var.
             // The offset of these structs is already calculated in lvaAssignVirtualFrameOffsetToArg methos.
             // Make sure the code below is not executed for these structs and the offset is not changed.
             && !varDsc->lvIsParam
+#endif // !defined(_TARGET_ARM_) || defined(LEGACY_BACKEND)
 #endif // UNIX_AMD64_ABI
             )
         {
@@ -6404,6 +6656,14 @@ void Compiler::lvaDumpEntry(unsigned lclNum, FrameLayoutState curState, size_t r
     if (varDsc->lvStackByref)
     {
         printf(" stack-byref");
+    }
+    if (varDsc->lvClassHnd != nullptr)
+    {
+        printf(" class-hnd");
+    }
+    if (varDsc->lvClassIsExact)
+    {
+        printf(" exact");
     }
 #ifndef _TARGET_64BIT_
     if (varDsc->lvStructDoubleAlign)

@@ -523,6 +523,8 @@ void ExternalMethodFrame::UpdateRegDisplay(const PREGDISPLAY pRD)
 
     UpdateRegDisplayHelper(pRD, CbStackPopUsingGCRefMap(GetGCRefMap()));
 
+    LOG((LF_GCROOTS, LL_INFO100000, "STACKWALK    ExternalMethodFrane::UpdateRegDisplay(ip:%p, sp:%p)\n", pRD->ControlPC, pRD->SP));
+
     RETURN;
 }
 
@@ -561,6 +563,8 @@ void StubDispatchFrame::UpdateRegDisplay(const PREGDISPLAY pRD)
         pRD->ControlPC = GetAdjustedCallAddress(pRD->ControlPC);
     }
 
+    LOG((LF_GCROOTS, LL_INFO100000, "STACKWALK    StubDispatchFrame::UpdateRegDisplay(ip:%p, sp:%p)\n", pRD->ControlPC, pRD->SP));
+
     RETURN;
 }
 
@@ -594,9 +598,6 @@ void FaultingExceptionFrame::UpdateRegDisplay(const PREGDISPLAY pRD)
     }
     CONTRACT_END;
 
-    // reset pContext; it's only valid for active (top-most) frame
-    pRD->pContext = NULL;
-
     pRD->PCTAddr = GetReturnAddressPtr();
 
 #ifdef WIN64EXCEPTIONS
@@ -618,6 +619,9 @@ void FaultingExceptionFrame::UpdateRegDisplay(const PREGDISPLAY pRD)
     pRD->IsCallerSPValid = FALSE;        // Don't add usage of this field.  This is only temporary.
 
 #else // WIN64EXCEPTIONS
+
+    // reset pContext; it's only valid for active (top-most) frame
+    pRD->pContext = NULL;
 
     CalleeSavedRegisters* regs = GetCalleeSavedRegisters();
 
@@ -742,7 +746,7 @@ void ResumableFrame::UpdateRegDisplay(const PREGDISPLAY pRD)
 
 #ifdef WIN64EXCEPTIONS
 
-    memcpy(pRD->pCurrentContext, &m_Regs, sizeof(CONTEXT));
+    CopyMemory(pRD->pCurrentContext, m_Regs, sizeof(T_CONTEXT));
 
     pRD->SP = m_Regs->Esp;
     pRD->ControlPC = m_Regs->Eip;
@@ -800,6 +804,8 @@ void ResumableFrame::UpdateRegDisplay(const PREGDISPLAY pRD)
 
 #endif // !WIN64EXCEPTIONS
 
+    LOG((LF_GCROOTS, LL_INFO100000, "STACKWALK    ResumableFrame::UpdateRegDisplay(ip:%p, sp:%p)\n", pRD->ControlPC, pRD->SP));
+
     RETURN;
 }
 
@@ -856,6 +862,8 @@ void HijackFrame::UpdateRegDisplay(const PREGDISPLAY pRD)
     pRD->SP  = (DWORD)(pRD->PCTAddr + sizeof(TADDR));
 
 #endif // WIN64EXCEPTIONS
+
+    LOG((LF_GCROOTS, LL_INFO100000, "STACKWALK    HijackFrame::UpdateRegDisplay(ip:%p, sp:%p)\n", pRD->ControlPC, pRD->SP));
 }
 
 #endif  // FEATURE_HIJACK
@@ -875,6 +883,8 @@ void PInvokeCalliFrame::UpdateRegDisplay(const PREGDISPLAY pRD)
     VASigCookie *pVASigCookie = GetVASigCookie();
     UpdateRegDisplayHelper(pRD, pVASigCookie->sizeOfArgs+sizeof(int));
 
+    LOG((LF_GCROOTS, LL_INFO100000, "STACKWALK    PInvokeCalliFrame::UpdateRegDisplay(ip:%p, sp:%p)\n", pRD->ControlPC, pRD->SP));
+
     RETURN;
 }
 
@@ -890,8 +900,6 @@ void TailCallFrame::UpdateRegDisplay(const PREGDISPLAY pRD)
     }
     CONTRACT_END;
 
-    // reset pContext; it's only valid for active (top-most) frame
-    pRD->pContext = NULL;
     pRD->PCTAddr = GetReturnAddressPtr();
 
 #ifdef WIN64EXCEPTIONS
@@ -908,6 +916,9 @@ void TailCallFrame::UpdateRegDisplay(const PREGDISPLAY pRD)
     SyncRegDisplayToCurrentContext(pRD);
 
 #else
+
+    // reset pContext; it's only valid for active (top-most) frame
+    pRD->pContext = NULL;
 
 #define CALLEE_SAVED_REGISTER(regname) pRD->p##regname = (DWORD*) &m_regs.regname;
     ENUM_CALLEE_SAVED_REGISTERS();
@@ -1461,7 +1472,7 @@ extern "C" DWORD __stdcall getcpuid(DWORD arg, unsigned char result[16])
             "  mov %%edx, 12(%[result])\n" \
         : "=a"(eax) /*output in eax*/\
         : "a"(arg), [result]"r"(result) /*inputs - arg in eax, result in any register*/\
-        : "eax", "rbx", "ecx", "edx", "memory" /* registers that are clobbered, *result is clobbered */
+        : "eax", "ebx", "ecx", "edx", "memory" /* registers that are clobbered, *result is clobbered */
         );
     return eax;
 }
@@ -1476,7 +1487,7 @@ extern "C" DWORD __stdcall getextcpuid(DWORD arg1, DWORD arg2, unsigned char res
             "  mov %%edx, 12(%[result])\n" \
         : "=a"(eax) /*output in eax*/\
         : "c"(arg1), "a"(arg2), [result]"r"(result) /*inputs - arg1 in ecx, arg2 in eax, result in any register*/\
-        : "eax", "rbx", "ecx", "edx", "memory" /* registers that are clobbered, *result is clobbered */
+        : "eax", "ebx", "ecx", "edx", "memory" /* registers that are clobbered, *result is clobbered */
         );
     return eax;
 }

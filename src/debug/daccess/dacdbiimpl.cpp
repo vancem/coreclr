@@ -4748,14 +4748,7 @@ DWORD DacDbiInterfaceImpl::GetUniqueThreadID(VMPTR_Thread vmThread)
     Thread * pThread = vmThread.GetDacPtr();
     _ASSERTE(pThread != NULL);
 
-    if (CLRTaskHosted())
-    {
-        return pThread->GetThreadId();
-    }
-    else
-    {
-        return pThread->GetOSThreadId();
-    }
+    return pThread->GetOSThreadId();
 }
 
 // Return the object handle to the managed Exception object of the current exception
@@ -5459,15 +5452,8 @@ CorDebugUserState DacDbiInterfaceImpl::GetPartialUserState(VMPTR_Thread vmThread
         result |= USER_WAIT_SLEEP_JOIN;          
     }
 
-    // Don't report a SuspendRequested if the thread has actually Suspended.
-    if ((ts & Thread::TS_UserSuspendPending) && (ts & Thread::TS_SyncSuspended))
-    {
-        result |= USER_SUSPENDED;
-    }
-    else if (ts & Thread::TS_UserSuspendPending)
-    {
-        result |= USER_SUSPEND_REQUESTED;
-    }
+    // CoreCLR does not support user-requested thread suspension
+    _ASSERTE(!(ts & Thread::TS_UserSuspendPending));
 
     if (pThread->IsThreadPoolThread())
     {

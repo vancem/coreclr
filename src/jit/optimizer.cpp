@@ -227,7 +227,7 @@ void Compiler::optMarkLoopBlocks(BasicBlock* begBlk, BasicBlock* endBlk, bool ex
 
                 unsigned weight;
 
-                if ((curBlk->bbFlags & BBF_PROF_WEIGHT) != 0)
+                if (curBlk->hasProfileWeight())
                 {
                     // We have real profile weights, so we aren't going to change this blocks weight
                     weight = curBlk->bbWeight;
@@ -370,7 +370,7 @@ void Compiler::optUnmarkLoopBlocks(BasicBlock* begBlk, BasicBlock* endBlk)
             // Don't unmark blocks that are set to BB_MAX_WEIGHT
             // Don't unmark blocks when we are using profile weights
             //
-            if (!curBlk->isMaxBBWeight() && ((curBlk->bbFlags & BBF_PROF_WEIGHT) == 0))
+            if (!curBlk->isMaxBBWeight() && !curBlk->hasProfileWeight())
             {
                 if (!fgDominate(curBlk, endBlk))
                 {
@@ -3527,8 +3527,7 @@ void Compiler::fgOptWhileLoop(BasicBlock* block)
     {
         // Only rely upon the profile weight when all three of these blocks
         // have good profile weights
-        if ((block->bbFlags & BBF_PROF_WEIGHT) && (bTest->bbFlags & BBF_PROF_WEIGHT) &&
-            (block->bbNext->bbFlags & BBF_PROF_WEIGHT))
+        if (block->hasProfileWeight() && bTest->hasProfileWeight() && block->bbNext->hasProfileWeight())
         {
             allProfileWeightsAreValid = true;
 
@@ -4836,18 +4835,16 @@ void Compiler::optEnsureUniqueHead(unsigned loopInd, unsigned ambientWeight)
  *  Determine the kind of interference for the call.
  */
 
-/* static */ inline Compiler::callInterf Compiler::optCallInterf(GenTreePtr call)
+/* static */ inline Compiler::callInterf Compiler::optCallInterf(GenTreeCall* call)
 {
-    assert(call->gtOper == GT_CALL);
-
     // if not a helper, kills everything
-    if (call->gtCall.gtCallType != CT_HELPER)
+    if (call->gtCallType != CT_HELPER)
     {
         return CALLINT_ALL;
     }
 
     // setfield and array address store kill all indirections
-    switch (eeGetHelperNum(call->gtCall.gtCallMethHnd))
+    switch (eeGetHelperNum(call->gtCallMethHnd))
     {
         case CORINFO_HELP_ASSIGN_REF:         // Not strictly needed as we don't make a GT_CALL with this
         case CORINFO_HELP_CHECKED_ASSIGN_REF: // Not strictly needed as we don't make a GT_CALL with this
@@ -5311,7 +5308,7 @@ Compiler::fgWalkResult Compiler::optIsVarAssgCB(GenTreePtr* pTree, fgWalkData* d
         isVarAssgDsc* desc = (isVarAssgDsc*)data->pCallbackData;
         assert(desc && desc->ivaSelf == desc);
 
-        desc->ivaMaskCall = optCallInterf(tree);
+        desc->ivaMaskCall = optCallInterf(tree->AsCall());
     }
 
     return WALK_CONTINUE;
@@ -6555,9 +6552,8 @@ void Compiler::fgCreateLoopPreHeader(unsigned lnum)
         }
         else
         {
-            bool allValidProfileWeights = ((head->bbFlags & BBF_PROF_WEIGHT) != 0) &&
-                                          ((head->bbJumpDest->bbFlags & BBF_PROF_WEIGHT) != 0) &&
-                                          ((head->bbNext->bbFlags & BBF_PROF_WEIGHT) != 0);
+            bool allValidProfileWeights =
+                (head->hasProfileWeight() && head->bbJumpDest->hasProfileWeight() && head->bbNext->hasProfileWeight());
 
             if (allValidProfileWeights)
             {

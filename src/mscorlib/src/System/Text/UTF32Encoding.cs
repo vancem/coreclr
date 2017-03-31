@@ -193,6 +193,8 @@ namespace System.Text
 
             // For fallback we may need a fallback buffer
             EncoderFallbackBuffer fallbackBuffer = null;
+            char* charsForFallback;
+
             if (encoder != null)
             {
                 highSurrogate = encoder.charLeftOver;
@@ -200,8 +202,7 @@ namespace System.Text
 
                 // We mustn't have left over fallback data when counting
                 if (fallbackBuffer.Remaining > 0)
-                    throw new ArgumentException(Environment.GetResourceString("Argument_EncoderFallbackNotEmpty",
-                    this.EncodingName, encoder.Fallback.GetType()));
+                    throw new ArgumentException(SR.Format(SR.Argument_EncoderFallbackNotEmpty, this.EncodingName, encoder.Fallback.GetType()));
             }
             else
             {
@@ -250,7 +251,9 @@ namespace System.Text
                     chars--;
 
                     // Do the fallback
-                    fallbackBuffer.InternalFallback(highSurrogate, ref chars);
+                    charsForFallback = chars;
+                    fallbackBuffer.InternalFallback(highSurrogate, ref charsForFallback);
+                    chars = charsForFallback;
 
                     // We're going to fallback the old high surrogate.
                     highSurrogate = '\0';
@@ -271,7 +274,9 @@ namespace System.Text
                 if (Char.IsLowSurrogate(ch))
                 {
                     // We have a leading low surrogate, do the fallback
-                    fallbackBuffer.InternalFallback(ch, ref chars);
+                    charsForFallback = chars;
+                    fallbackBuffer.InternalFallback(ch, ref charsForFallback);
+                    chars = charsForFallback;
 
                     // Try again with fallback buffer
                     continue;
@@ -285,15 +290,17 @@ namespace System.Text
             if ((encoder == null || encoder.MustFlush) && highSurrogate > 0)
             {
                 // We have to do the fallback for the lonely high surrogate
-                fallbackBuffer.InternalFallback(highSurrogate, ref chars);
+                charsForFallback = chars;
+                fallbackBuffer.InternalFallback(highSurrogate, ref charsForFallback);
+                chars = charsForFallback;
+
                 highSurrogate = (char)0;
                 goto TryAgain;
             }
 
             // Check for overflows.
             if (byteCount < 0)
-                throw new ArgumentOutOfRangeException(nameof(count), Environment.GetResourceString(
-                    "ArgumentOutOfRange_GetByteCountOverflow"));
+                throw new ArgumentOutOfRangeException(nameof(count), SR.ArgumentOutOfRange_GetByteCountOverflow);
 
             // Shouldn't have anything in fallback buffer for GetByteCount
             // (don't have to check m_throwOnOverflow for count)
@@ -321,6 +328,8 @@ namespace System.Text
 
             // For fallback we may need a fallback buffer
             EncoderFallbackBuffer fallbackBuffer = null;
+            char* charsForFallback;
+
             if (encoder != null)
             {
                 highSurrogate = encoder.charLeftOver;
@@ -328,8 +337,7 @@ namespace System.Text
 
                 // We mustn't have left over fallback data when not converting
                 if (encoder.m_throwOnOverflow && fallbackBuffer.Remaining > 0)
-                    throw new ArgumentException(Environment.GetResourceString("Argument_EncoderFallbackNotEmpty",
-                    this.EncodingName, encoder.Fallback.GetType()));
+                    throw new ArgumentException(SR.Format(SR.Argument_EncoderFallbackNotEmpty, this.EncodingName, encoder.Fallback.GetType()));
             }
             else
             {
@@ -412,7 +420,9 @@ namespace System.Text
                     chars--;
 
                     // Do the fallback
-                    fallbackBuffer.InternalFallback(highSurrogate, ref chars);
+                    charsForFallback = chars;
+                    fallbackBuffer.InternalFallback(highSurrogate, ref charsForFallback);
+                    chars = charsForFallback;
 
                     // We're going to fallback the old high surrogate.
                     highSurrogate = '\0';
@@ -433,7 +443,9 @@ namespace System.Text
                 if (Char.IsLowSurrogate(ch))
                 {
                     // We have a leading low surrogate, do the fallback
-                    fallbackBuffer.InternalFallback(ch, ref chars);
+                    charsForFallback = chars;
+                    fallbackBuffer.InternalFallback(ch, ref charsForFallback);
+                    chars = charsForFallback;
 
                     // Try again with fallback buffer
                     continue;
@@ -476,7 +488,10 @@ namespace System.Text
             if ((encoder == null || encoder.MustFlush) && highSurrogate > 0)
             {
                 // We have to do the fallback for the lonely high surrogate
-                fallbackBuffer.InternalFallback(highSurrogate, ref chars);
+                charsForFallback = chars;
+                fallbackBuffer.InternalFallback(highSurrogate, ref charsForFallback);
+                chars = charsForFallback;
+
                 highSurrogate = (char)0;
                 goto TryAgain;
             }
@@ -629,7 +644,7 @@ namespace System.Text
 
             // Check for overflows.
             if (charCount < 0)
-                throw new ArgumentOutOfRangeException(nameof(count), Environment.GetResourceString("ArgumentOutOfRange_GetByteCountOverflow"));
+                throw new ArgumentOutOfRangeException(nameof(count), SR.ArgumentOutOfRange_GetByteCountOverflow);
 
             // Shouldn't have anything in fallback buffer for GetCharCount
             // (don't have to check m_throwOnOverflow for chars or count)
@@ -663,6 +678,7 @@ namespace System.Text
 
             // For fallback we may need a fallback buffer
             DecoderFallbackBuffer fallbackBuffer = null;
+            char* charsForFallback;
 
             // See if there's anything in our decoder
             if (decoder != null)
@@ -729,8 +745,13 @@ namespace System.Text
                     }
 
                     // Chars won't be updated unless this works.
-                    if (!fallbackBuffer.InternalFallback(fallbackBytes, bytes, ref chars))
+                    charsForFallback = chars;
+                    bool fallbackResult = fallbackBuffer.InternalFallback(fallbackBytes, bytes, ref charsForFallback);
+                    chars = charsForFallback;
+
+                    if (!fallbackResult)
                     {
+
                         // Couldn't fallback, throw or wait til next time
                         // We either read enough bytes for bytes-=4 to work, or we're
                         // going to throw in ThrowCharsOverflow because chars == charStart
@@ -813,7 +834,11 @@ namespace System.Text
                     }
                 }
 
-                if (!fallbackBuffer.InternalFallback(fallbackBytes, bytes, ref chars))
+                charsForFallback = chars;
+                bool fallbackResult = fallbackBuffer.InternalFallback(fallbackBytes, bytes, ref charsForFallback);
+                chars = charsForFallback;
+
+                if (!fallbackResult)
                 {
                     // Couldn't fallback.
                     fallbackBuffer.InternalReset();
@@ -879,7 +904,7 @@ namespace System.Text
         {
             if (charCount < 0)
                 throw new ArgumentOutOfRangeException(nameof(charCount),
-                     Environment.GetResourceString("ArgumentOutOfRange_NeedNonNegNum"));
+                     SR.ArgumentOutOfRange_NeedNonNegNum);
             Contract.EndContractBlock();
 
             // Characters would be # of characters + 1 in case left over high surrogate is ? * max fallback
@@ -892,7 +917,7 @@ namespace System.Text
             byteCount *= 4;
 
             if (byteCount > 0x7fffffff)
-                throw new ArgumentOutOfRangeException(nameof(charCount), Environment.GetResourceString("ArgumentOutOfRange_GetByteCountOverflow"));
+                throw new ArgumentOutOfRangeException(nameof(charCount), SR.ArgumentOutOfRange_GetByteCountOverflow);
 
             return (int)byteCount;
         }
@@ -902,7 +927,7 @@ namespace System.Text
         {
             if (byteCount < 0)
                 throw new ArgumentOutOfRangeException(nameof(byteCount),
-                     Environment.GetResourceString("ArgumentOutOfRange_NeedNonNegNum"));
+                     SR.ArgumentOutOfRange_NeedNonNegNum);
             Contract.EndContractBlock();
 
             // A supplementary character becomes 2 surrogate characters, so 4 input bytes becomes 2 chars,
@@ -922,7 +947,7 @@ namespace System.Text
             }
 
             if (charCount > 0x7fffffff)
-                throw new ArgumentOutOfRangeException(nameof(byteCount), Environment.GetResourceString("ArgumentOutOfRange_GetCharCountOverflow"));
+                throw new ArgumentOutOfRangeException(nameof(byteCount), SR.ArgumentOutOfRange_GetCharCountOverflow);
 
             return (int)charCount;
         }
@@ -970,7 +995,7 @@ namespace System.Text
         }
 
         [Serializable]
-        internal class UTF32Decoder : DecoderNLS
+        private sealed class UTF32Decoder : DecoderNLS
         {
             // Need a place to store any extra bytes we may have picked up
             internal int iChar = 0;

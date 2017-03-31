@@ -39,7 +39,7 @@ namespace System.Resources
     // allowing us to ask for a WinRT-specific ResourceManager.
     // It is important to have WindowsRuntimeResourceManagerBase as regular class with virtual methods and default implementations. 
     // Defining WindowsRuntimeResourceManagerBase as abstract class or interface will cause issues when adding more methods to it 
-    // because it’ll create dependency between mscorlib and System.Runtime.WindowsRuntime which will require always shipping both DLLs together. 
+    // because itï¿½ll create dependency between mscorlib and System.Runtime.WindowsRuntime which will require always shipping both DLLs together. 
     // Also using interface or abstract class will not play nice with FriendAccessAllowed.
     //
     [FriendAccessAllowed]
@@ -310,7 +310,7 @@ namespace System.Resources
             Contract.EndContractBlock();
 
             if (!(assembly is RuntimeAssembly))
-                throw new ArgumentException(Environment.GetResourceString("Argument_MustBeRuntimeAssembly"));
+                throw new ArgumentException(SR.Argument_MustBeRuntimeAssembly);
 
             MainAssembly = assembly;
             BaseNameField = baseName;
@@ -340,13 +340,13 @@ namespace System.Resources
             Contract.EndContractBlock();
 
             if (!(assembly is RuntimeAssembly))
-                throw new ArgumentException(Environment.GetResourceString("Argument_MustBeRuntimeAssembly"));
+                throw new ArgumentException(SR.Argument_MustBeRuntimeAssembly);
 
             MainAssembly = assembly;
             BaseNameField = baseName;
 
             if (usingResourceSet != null && (usingResourceSet != _minResourceSet) && !(usingResourceSet.IsSubclassOf(_minResourceSet)))
-                throw new ArgumentException(Environment.GetResourceString("Arg_ResMgrNotResSet"), nameof(usingResourceSet));
+                throw new ArgumentException(SR.Arg_ResMgrNotResSet, nameof(usingResourceSet));
             _userResourceSet = usingResourceSet;
 
             CommonAssemblyInit();
@@ -367,7 +367,7 @@ namespace System.Resources
             Contract.EndContractBlock();
 
             if (!(resourceSource is RuntimeType))
-                throw new ArgumentException(Environment.GetResourceString("Argument_MustBeRuntimeType"));
+                throw new ArgumentException(SR.Argument_MustBeRuntimeType);
 
             _locationInfo = resourceSource;
             MainAssembly = _locationInfo.Assembly;
@@ -758,7 +758,7 @@ namespace System.Resources
             // Ensure that the assembly reference is not null
             if (a == null)
             {
-                throw new ArgumentNullException(nameof(a), Environment.GetResourceString("ArgumentNull_Assembly"));
+                throw new ArgumentNullException(nameof(a), SR.ArgumentNull_Assembly);
             }
             Contract.EndContractBlock();
 
@@ -953,7 +953,7 @@ namespace System.Resources
                 {
                     // Cannot load the WindowsRuntimeResourceManager when in a compilation process, since it
                     // lives in System.Runtime.WindowsRuntime and only mscorlib may be loaded for execution.
-                    if (AppDomain.IsAppXModel() && !AppDomain.IsAppXNGen)
+                    if (AppDomain.IsAppXModel())
                     {
                         s_IsAppXModel = true;
 
@@ -1120,9 +1120,9 @@ namespace System.Resources
                     // Always throw if we did not fully succeed in initializing the WinRT Resource Manager.
 
                     if (_PRIExceptionInfo != null && _PRIExceptionInfo._PackageSimpleName != null && _PRIExceptionInfo._ResWFile != null)
-                        throw new MissingManifestResourceException(Environment.GetResourceString("MissingManifestResource_ResWFileNotLoaded", _PRIExceptionInfo._ResWFile, _PRIExceptionInfo._PackageSimpleName));
+                        throw new MissingManifestResourceException(SR.Format(SR.MissingManifestResource_ResWFileNotLoaded, _PRIExceptionInfo._ResWFile, _PRIExceptionInfo._PackageSimpleName));
 
-                    throw new MissingManifestResourceException(Environment.GetResourceString("MissingManifestResource_NoPRIresources"));
+                    throw new MissingManifestResourceException(SR.MissingManifestResource_NoPRIresources);
                 }
 
                 // Throws WinRT hresults.
@@ -1133,11 +1133,11 @@ namespace System.Resources
             else
 #endif // FEATURE_APPX
             {
-                if (null == culture)
+                if (culture == null)
                 {
                     // When running inside AppX we want to ignore the languages list when trying to come up with our CurrentUICulture.
                     // This line behaves the same way as CultureInfo.CurrentUICulture would have in .NET 4
-                    culture = Thread.CurrentThread.GetCurrentUICultureNoAppX();
+                    culture = CultureInfo.GetCurrentUICultureNoAppX();
                 }
 
                 ResourceSet last = GetFirstResourceSet(culture);
@@ -1226,7 +1226,7 @@ namespace System.Resources
             {
                 // When running inside AppX we want to ignore the languages list when trying to come up with our CurrentUICulture.
                 // This line behaves the same way as CultureInfo.CurrentUICulture would have in .NET 4
-                culture = Thread.CurrentThread.GetCurrentUICultureNoAppX();
+                culture = CultureInfo.GetCurrentUICultureNoAppX();
             }
 
             ResourceSet last = GetFirstResourceSet(culture);
@@ -1299,7 +1299,7 @@ namespace System.Resources
             Object obj = GetObject(name, culture, false);
             UnmanagedMemoryStream ums = obj as UnmanagedMemoryStream;
             if (ums == null && obj != null)
-                throw new InvalidOperationException(Environment.GetResourceString("InvalidOperation_ResourceNotStream_Name", name));
+                throw new InvalidOperationException(SR.Format(SR.InvalidOperation_ResourceNotStream_Name, name));
             return ums;
         }
 

@@ -106,7 +106,6 @@ public:
 #endif //FEATURE_COMINTEROP
     static FCDECL1(FC_BOOL_RET,IsThreadpoolThread,             ThreadBaseObject* thread);
 
-    static FCDECL0(void, FCMemoryBarrier);
     static FCDECL1(void, SetIsThreadStaticsArray, Object* pObject);
 
     static FCDECL2(void,    SetAbortReason, ThreadBaseObject* pThisUNSAFE, Object* pObject);
@@ -121,7 +120,7 @@ private:
     };
 
     static void KickOffThread_Worker(LPVOID /* KickOffThread_Args* */);
-    static ULONG __stdcall KickOffThread(void *pass);
+    static ULONG WINAPI KickOffThread(void *pass);
     static BOOL DoJoin(THREADBASEREF DyingThread, INT32 timeout);
 };
 

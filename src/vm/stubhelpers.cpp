@@ -21,7 +21,6 @@
 #include "comdatetime.h"
 #include "gcheaputilities.h"
 #include "interoputil.h"
-#include "gcscan.h"
 
 #ifdef FEATURE_COMINTEROP
 #include <oletls.h>
@@ -58,7 +57,7 @@ void StubHelpers::ValidateObjectInternal(Object *pObjUNSAFE, BOOL fValidateNextO
 }
 	CONTRACTL_END;
 
-	_ASSERTE(GCScan::GetGcRuntimeStructuresValid());
+	_ASSERTE(GCHeapUtilities::GetGCHeap()->RuntimeStructuresValid());
 
 	// validate the object - there's no need to validate next object's
 	// header since we validate the next object explicitly below
@@ -159,7 +158,7 @@ void StubHelpers::ProcessByrefValidationList()
         {
             entry = s_ByrefValidationEntries[i];
 
-            Object *pObjUNSAFE = GCHeapUtilities::GetGCHeap()->GetContainingObject(entry.pByref);
+            Object *pObjUNSAFE = GCHeapUtilities::GetGCHeap()->GetContainingObject(entry.pByref, false);
             ValidateObjectInternal(pObjUNSAFE, TRUE);
         }
     }
@@ -775,10 +774,7 @@ FCIMPL1(StringObject*, StubHelpers::UriMarshaler__GetRawUriFromNative, ABI::Wind
         GCX_PREEMP();
 
         // Get the RawUri string from the WinRT URI object
-        {
-            LeaveRuntimeHolder lrh(**(size_t**)(IUnknown*)pIUriRC);
-            IfFailThrow(pIUriRC->get_RawUri(hsRawUriName.Address()));
-        }
+        IfFailThrow(pIUriRC->get_RawUri(hsRawUriName.Address()));
 
         pwszRawUri = hsRawUriName.GetRawBuffer(&cchRawUri);
     }
@@ -827,18 +823,15 @@ StubHelpers::EventArgsMarshaler__CreateNativeNCCEventArgsInstance
 
     SafeComHolderPreemp<IInspectable> pInner;
     HRESULT hr;
-    {
-        LeaveRuntimeHolder lrh(**(size_t **)(IUnknown *)pFactory);
-        hr = pFactory->CreateInstanceWithAllParameters(
-            (ABI::Windows::UI::Xaml::Interop::NotifyCollectionChangedAction)action,
-            (ABI::Windows::UI::Xaml::Interop::IBindableVector *)newItem,
-            (ABI::Windows::UI::Xaml::Interop::IBindableVector *)oldItem,
-            newIndex,
-            oldIndex,
-            NULL,
-            &pInner,
-            &pArgsRC);
-    }
+    hr = pFactory->CreateInstanceWithAllParameters(
+        (ABI::Windows::UI::Xaml::Interop::NotifyCollectionChangedAction)action,
+        (ABI::Windows::UI::Xaml::Interop::IBindableVector *)newItem,
+        (ABI::Windows::UI::Xaml::Interop::IBindableVector *)oldItem,
+        newIndex,
+        oldIndex,
+        NULL,
+        &pInner,
+        &pArgsRC);
     IfFailThrow(hr);
 
     END_QCALL;
@@ -860,14 +853,11 @@ ABI::Windows::UI::Xaml::Data::IPropertyChangedEventArgs* QCALLTYPE
 
     SafeComHolderPreemp<IInspectable> pInner;
     HRESULT hr;
-    {
-        LeaveRuntimeHolder lrh(**(size_t **)(IUnknown *)pFactory);
-        hr = pFactory->CreateInstance(
-            name,
-            NULL,
-            &pInner,
-            &pArgsRC);
-    }
+    hr = pFactory->CreateInstance(
+        name,
+        NULL,
+        &pInner,
+        &pArgsRC);
     IfFailThrow(hr);
 
     END_QCALL;

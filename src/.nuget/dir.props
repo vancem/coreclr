@@ -5,10 +5,13 @@
   <PropertyGroup>
     <!-- defined in buildtools packaging.targets, but we need this before targets are imported -->
     <PackagePlatform>AnyCPU</PackagePlatform>
-  
+    
+    <!-- build the transport package which includes product and symbols in addition to standard packages -->
+    <CreatePackedPackage Condition="'$(CreatePackedPackage)' == ''">true</CreatePackedPackage>
+
     <!-- Distro rid is passed as runtimeos-arch-->
     <_parseDistroRid>$(__DistroRid)</_parseDistroRid>
-    <_parseDistroRid Condition="'$(_parseDistroRid)' == '' and '$(__BuildOS)' == 'OSX'">osx.10.10-x64</_parseDistroRid>
+    <_parseDistroRid Condition="'$(_parseDistroRid)' == '' and '$(__BuildOS)' == 'OSX'">osx.10.12-x64</_parseDistroRid>
     <_distroRidIndex>$(_parseDistroRid.IndexOfAny("-"))</_distroRidIndex>
     <_archRidIndex>$([MSBuild]::Add($(_distroRidIndex), 1))</_archRidIndex>
     <OSRid Condition="'$(OSRid)' == '' and '$(_distroRidIndex)' != '-1'">$(_parseDistroRid.SubString(0, $(_distroRidIndex)))</OSRid>
@@ -58,24 +61,51 @@
     <When Condition="'$(PackageRID)' != ''" />
     <When Condition="'$(_runtimeOSFamily)' == 'win'">
       <PropertyGroup>
-        <PackageRID Condition="'$(ArchGroup)' == 'x86' OR '$(ArchGroup)' == 'x64'">win7-$(ArchGroup)</PackageRID>
-        <PackageRID Condition="'$(ArchGroup)' == 'arm'">win8-$(ArchGroup)</PackageRID>
-        <PackageRID Condition="'$(ArchGroup)' == 'arm64'">win10-$(ArchGroup)</PackageRID>
+        <RIDPlatform>win7</RIDPlatform>
+        <RIDPlatform Condition="'$(ArchGroup)' == 'arm'">win8</RIDPlatform>
+        <RIDPlatform Condition="'$(ArchGroup)' == 'arm64'">win10</RIDPlatform>
+        
+        <!-- Set the platform part of the RID if we are doing a portable build -->
+        <RIDPlatform Condition="'$(PortableBuild)' == '1'">win</RIDPlatform>
+        <PackageRID>$(RIDPlatform)-$(ArchGroup)</PackageRID>
       </PropertyGroup>
     </When>
     <When Condition="'$(_runtimeOSFamily)' == 'osx'">
       <PropertyGroup>
-        <PackageRID>osx.10.10-$(ArchGroup)</PackageRID>
+        <PackageRID>osx.10.12-$(ArchGroup)</PackageRID>
+        <!-- Set the platform part of the RID if we are doing a portable build -->
+        <PackageRID Condition="'$(PortableBuild)' == '1'">osx-$(ArchGroup)</PackageRID>
       </PropertyGroup>
     </When>
     <When Condition="'$(_runtimeOSFamily)' == 'rhel'">
       <PropertyGroup>
         <PackageRID>rhel.7-$(ArchGroup)</PackageRID>
+        <!-- Set the platform part of the RID if we are doing a portable build -->
+        <PackageRID Condition="'$(PortableBuild)' == '1'">linux-$(ArchGroup)</PackageRID>
       </PropertyGroup>
     </When>
     <Otherwise>
       <PropertyGroup>
         <PackageRID>$(RuntimeOS)-$(ArchGroup)</PackageRID>
+        <!-- Set the platform part of the RID if we are doing a portable build -->
+        <PackageRID Condition="'$(PortableBuild)' == '1'">linux-$(ArchGroup)</PackageRID>
+      </PropertyGroup>
+    </Otherwise>
+  </Choose>
+
+  <!-- Determine per-platform native binary extensions. -->
+  <Choose>
+    <When Condition="'$(_runtimeOSFamily)' == 'win'" />
+    <When Condition="'$(_runtimeOSFamily)' == 'osx'">
+      <PropertyGroup>
+        <LibraryFileExtension>.dylib</LibraryFileExtension>
+        <SymbolFileExtension>.dwarf</SymbolFileExtension>
+      </PropertyGroup>
+    </When>
+    <Otherwise>
+      <PropertyGroup>
+        <LibraryFileExtension>.so</LibraryFileExtension>
+        <SymbolFileExtension>.dbg</SymbolFileExtension>
       </PropertyGroup>
     </Otherwise>
   </Choose>
@@ -89,6 +119,9 @@
     <OfficialBuildRID Include="fedora.23-x64" />
     <OfficialBuildRID Include="fedora.24-x64" />
     <OfficialBuildRID Include="linux-x64" />
+    <OfficialBuildRID Include="linux-arm">
+      <Platform>arm</Platform>
+    </OfficialBuildRID>
     <OfficialBuildRID Include="opensuse.42.1-x64" />
     <OfficialBuildRID Include="rhel.7-x64" />
     <OfficialBuildRID Include="tizen.4.0.0-armel">
@@ -105,17 +138,28 @@
     <OfficialBuildRID Include="ubuntu.16.10-x64" />
   </ItemGroup>
   <ItemGroup Condition="$(SupportedPackageOSGroups.Contains(';OSX;'))">
-    <OfficialBuildRID Include="osx.10.10-x64" />
+    <OfficialBuildRID Include="osx.10.12-x64" />
+    <OfficialBuildRID Include="osx-x64" />
   </ItemGroup>
   <ItemGroup Condition="$(SupportedPackageOSGroups.Contains(';Windows_NT;'))">
     <OfficialBuildRID Include="win7-x86">
       <Platform>x86</Platform>
     </OfficialBuildRID>
+    <OfficialBuildRID Include="win-x86">
+      <Platform>x86</Platform>
+    </OfficialBuildRID>
     <OfficialBuildRID Include="win7-x64" />
+    <OfficialBuildRID Include="win-x64" />
     <OfficialBuildRID Include="win8-arm">
       <Platform>arm</Platform>
     </OfficialBuildRID>
     <OfficialBuildRID Include="win10-arm64">
+      <Platform>arm64</Platform>
+    </OfficialBuildRID>
+    <OfficialBuildRID Include="win-arm">
+      <Platform>arm</Platform>
+    </OfficialBuildRID>
+    <OfficialBuildRID Include="win-arm64">
       <Platform>arm64</Platform>
     </OfficialBuildRID>
   </ItemGroup>

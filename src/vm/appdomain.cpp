@@ -2747,10 +2747,6 @@ void SystemDomain::LoadBaseSystemClasses()
     _ASSERTE(!g_pEnumClass->IsValueType());
 
     // Load System.RuntimeType
-    // We need to load this after ValueType and Enum because RuntimeType now
-    // contains an enum field (m_invocationFlags). Otherwise INVOCATION_FLAGS
-    // would be treated as a reference type and clr!SigPointer::GetTypeHandleThrowing
-    // throws an exception.
     g_pRuntimeTypeClass = MscorlibBinder::GetClass(CLASS__CLASS);
     _ASSERTE(g_pRuntimeTypeClass->IsFullyLoaded());
 
@@ -2816,26 +2812,6 @@ void SystemDomain::LoadBaseSystemClasses()
 
 #ifndef CROSSGEN_COMPILE
     ECall::PopulateManagedStringConstructors();
-
-    if (CLRIoCompletionHosted())
-    {
-        g_pOverlappedDataClass = MscorlibBinder::GetClass(CLASS__OVERLAPPEDDATA);
-        _ASSERTE (g_pOverlappedDataClass);
-        if (CorHost2::GetHostOverlappedExtensionSize() != 0)
-        {
-            // Overlapped may have an extension if a host hosts IO completion subsystem
-            DWORD instanceFieldBytes = g_pOverlappedDataClass->GetNumInstanceFieldBytes() + CorHost2::GetHostOverlappedExtensionSize();
-            _ASSERTE (instanceFieldBytes + ObjSizeOf(Object) >= MIN_OBJECT_SIZE);
-            DWORD baseSize = (DWORD) (instanceFieldBytes + ObjSizeOf(Object));
-            baseSize = (baseSize + ALLOC_ALIGN_CONSTANT) & ~ALLOC_ALIGN_CONSTANT;  // m_BaseSize must be aligned
-            DWORD adjustSize = baseSize - g_pOverlappedDataClass->GetBaseSize();
-            CGCDesc* map = CGCDesc::GetCGCDescFromMT(g_pOverlappedDataClass);
-            CGCDescSeries * cur = map->GetHighestSeries();
-            _ASSERTE ((SSIZE_T)map->GetNumSeries() == 1);
-            cur->SetSeriesSize(cur->GetSeriesSize() - adjustSize);
-            g_pOverlappedDataClass->SetBaseSize(baseSize);
-        }
-    }
 #endif // CROSSGEN_COMPILE
 
     g_pExceptionClass = MscorlibBinder::GetClass(CLASS__EXCEPTION);
@@ -4357,6 +4333,10 @@ void AppDomain::Init()
     }
 #endif //FEATURE_COMINTEROP
 
+#ifdef FEATURE_TIERED_COMPILATION
+    m_callCounter.SetTieredCompilationManager(GetTieredCompilationManager());
+    m_tieredCompilationManager.Init(GetId());
+#endif
 #endif // CROSSGEN_COMPILE
 } // AppDomain::Init
 
@@ -7499,7 +7479,7 @@ void AppDomain::ProcessUnloadDomainEventOnFinalizeThread()
 {
     CONTRACTL
     {
-        NOTHROW;
+        THROWS;
         GC_TRIGGERS;
         MODE_COOPERATIVE;
     }
@@ -7536,45 +7516,37 @@ void AppDomain::RaiseUnloadDomainEvent()
 {
     CONTRACTL
     {
-        NOTHROW;
+        THROWS;
         MODE_COOPERATIVE;
         GC_TRIGGERS;
         SO_INTOLERANT;
     }
     CONTRACTL_END;
 
-    EX_TRY
+    Thread *pThread = GetThread();
+    if (this != pThread->GetDomain())
     {
-        Thread *pThread = GetThread();
-        if (this != pThread->GetDomain())
+        pThread->DoADCallBack(this, AppDomain::RaiseUnloadDomainEvent_Wrapper, this,ADV_FINALIZER|ADV_COMPILATION);
+    }
+    else
+    {
+        struct _gc
         {
-            pThread->DoADCallBack(this, AppDomain::RaiseUnloadDomainEvent_Wrapper, this,ADV_FINALIZER|ADV_COMPILATION);
-        }
-        else
-        {
-            struct _gc
-            {
-                APPDOMAINREF Domain;
-                OBJECTREF    Delegate;
-            } gc;
-            ZeroMemory(&gc, sizeof(gc));
+            APPDOMAINREF Domain;
+            OBJECTREF    Delegate;
+        } gc;
+        ZeroMemory(&gc, sizeof(gc));
 
-            GCPROTECT_BEGIN(gc);
-            gc.Domain = (APPDOMAINREF) GetRawExposedObject();
-            if (gc.Domain != NULL)
-            {
-                gc.Delegate = gc.Domain->m_pDomainUnloadEventHandler;
-                if (gc.Delegate != NULL)
-                    DistributeEventReliably(&gc.Delegate, (OBJECTREF *) &gc.Domain);
-            }
-            GCPROTECT_END();
+        GCPROTECT_BEGIN(gc);
+        gc.Domain = (APPDOMAINREF) GetRawExposedObject();
+        if (gc.Domain != NULL)
+        {
+            gc.Delegate = gc.Domain->m_pDomainUnloadEventHandler;
+            if (gc.Delegate != NULL)
+                DistributeEvent(&gc.Delegate, (OBJECTREF *) &gc.Domain);
         }
+        GCPROTECT_END();
     }
-    EX_CATCH
-    {
-        //@TODO call a MDA here
-    }
-    EX_END_CATCH(SwallowAllExceptions);
 }
 
 void AppDomain::RaiseLoadingAssemblyEvent(DomainAssembly *pAssembly)
@@ -7693,20 +7665,15 @@ void AppDomain::RaiseOneExitProcessEvent()
     } gc;
     ZeroMemory(&gc, sizeof(gc));
 
-    EX_TRY {
-
-        GCPROTECT_BEGIN(gc);
-        gc.Domain = (APPDOMAINREF) SystemDomain::GetCurrentDomain()->GetRawExposedObject();
-        if (gc.Domain != NULL)
-        {
-            gc.Delegate = gc.Domain->m_pProcessExitEventHandler;
-            if (gc.Delegate != NULL)
-                DistributeEventReliably(&gc.Delegate, (OBJECTREF *) &gc.Domain);
-        }
-        GCPROTECT_END();
-
-    } EX_CATCH {
-    } EX_END_CATCH(SwallowAllExceptions);
+    GCPROTECT_BEGIN(gc);
+    gc.Domain = (APPDOMAINREF) SystemDomain::GetCurrentDomain()->GetRawExposedObject();
+    if (gc.Domain != NULL)
+    {
+        gc.Delegate = gc.Domain->m_pProcessExitEventHandler;
+        if (gc.Delegate != NULL)
+            DistributeEvent(&gc.Delegate, (OBJECTREF *) &gc.Domain);
+    }
+    GCPROTECT_END();
 }
 
 // Local wrapper used in AppDomain::RaiseExitProcessEvent,
@@ -7715,17 +7682,13 @@ void AppDomain::RaiseOneExitProcessEvent()
 // because it calls private RaiseOneExitProcessEvent
 /*static*/ void AppDomain::RaiseOneExitProcessEvent_Wrapper(AppDomainIterator* pi)
 {
-
     STATIC_CONTRACT_MODE_COOPERATIVE;
-    STATIC_CONTRACT_NOTHROW;
+    STATIC_CONTRACT_THROWS;
     STATIC_CONTRACT_GC_TRIGGERS;
 
-    EX_TRY {
-        ENTER_DOMAIN_PTR(pi->GetDomain(),ADV_ITERATOR)
-        AppDomain::RaiseOneExitProcessEvent();
-        END_DOMAIN_TRANSITION;
-    } EX_CATCH {
-    } EX_END_CATCH(SwallowAllExceptions);
+    ENTER_DOMAIN_PTR(pi->GetDomain(), ADV_ITERATOR)
+    AppDomain::RaiseOneExitProcessEvent();
+    END_DOMAIN_TRANSITION;
 }
 
 static LONG s_ProcessedExitProcessEventCount = 0;
@@ -7742,7 +7705,7 @@ void AppDomain::RaiseExitProcessEvent()
         return;
 
     STATIC_CONTRACT_MODE_COOPERATIVE;
-    STATIC_CONTRACT_NOTHROW;
+    STATIC_CONTRACT_THROWS;
     STATIC_CONTRACT_GC_TRIGGERS;
 
     // Only finalizer thread during shutdown can call this function.
@@ -8294,6 +8257,18 @@ void AppDomain::Exit(BOOL fRunFinalizers, BOOL fAsyncExit)
             }
         }
     }
+
+    // Tell the tiered compilation manager to stop initiating any new work for background
+    // jit optimization. Its possible the standard thread unwind mechanisms would pre-emptively
+    // evacuate the jit threadpool worker threads from the domain on their own, but I see no reason 
+    // to take the risk of relying on them when we can easily augment with a cooperative 
+    // shutdown check. This notification only initiates the process of evacuating the threads
+    // and then the UnwindThreads() call below is where blocking will occur to ensure the threads 
+    // have exited the domain.
+    //
+#ifdef FEATURE_TIERED_COMPILATION
+    m_tieredCompilationManager.OnAppDomainShutdown();
+#endif
 
     //
     // Set up blocks so no threads can enter except for the finalizer and the thread
@@ -8990,12 +8965,6 @@ BOOL AppDomain::StopEEAndUnwindThreads(unsigned int retryCount, BOOL *pFMarkUnlo
             }
         } // ThreadStoreLockHolder
 
-        if (nThreadsNeedMoreWork && CLRTaskHosted())
-        {
-            // In case a thread is the domain is blocked due to its scheduler being
-            // occupied by another thread.
-            Thread::ThreadAbortWatchDog();
-        }
         m_dwThreadsStillInAppDomain=nThreadsNeedMoreWork;
         return !nThreadsNeedMoreWork;
     }
@@ -10661,24 +10630,6 @@ DWORD WINAPI AppDomain::ADUnloadThreadStart(void *args)
 
     {
         GCX_MAYBE_PREEMP(fOK);
-
-        if (fOK)
-        {
-            EX_TRY
-            {
-                if (CLRTaskHosted())
-                {
-                    // ADUnload helper thread is critical.  We do not want it to share scheduler
-                    // with other tasks.
-                    pThread->LeaveRuntime(0);
-                }
-            }
-            EX_CATCH
-            {
-                fOK = false;
-            }
-            EX_END_CATCH(SwallowAllExceptions);
-        }
 
         _ASSERTE (g_fADUnloadWorkerOK == -2);
 

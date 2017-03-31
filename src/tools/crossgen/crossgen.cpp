@@ -108,6 +108,7 @@ void PrintUsageHelper()
        W("\n")
        W("    /? or /help          - Display this screen\n")
        W("    /nologo              - Prevents displaying the logo\n")
+       W("    /silent              - Do not display completion message\n")
        W("    @response.rsp        - Process command line arguments from specified\n")
        W("                           response file\n")
        W("    /partialtrust        - Assembly will be run in a partial trust domain.\n")
@@ -498,6 +499,10 @@ int _cdecl wmain(int argc, __in_ecount(argc) WCHAR **argv)
         {
             fDisplayLogo = false;
         }
+        else if (MatchParameter(*argv, W("silent")))
+        {
+            dwFlags |= NGENWORKER_FLAGS_SILENT;
+        }
         else if (MatchParameter(*argv, W("Tuning")))
         {
             dwFlags |= NGENWORKER_FLAGS_TUNING;
@@ -834,14 +839,6 @@ int _cdecl wmain(int argc, __in_ecount(argc) WCHAR **argv)
             exit(FAILURE_RESULT);
         }
     }
-
-#ifdef FEATURE_READYTORUN_COMPILER
-    if (((dwFlags & NGENWORKER_FLAGS_TUNING) != 0) && ((dwFlags & NGENWORKER_FLAGS_READYTORUN) != 0))
-    {
-        Output(W("The /Tuning switch cannot be used with /ReadyToRun switch.\n"));
-        exit(FAILURE_RESULT);
-    }
-#endif
     
     // All argument processing has happened by now. The only messages that should appear before here are errors
     // related to argument parsing, such as the Usage message. Afterwards, other messages can appear.

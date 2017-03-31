@@ -2481,12 +2481,6 @@ void HijackFrame::UpdateRegDisplay(const PREGDISPLAY pRD)
 }
 #endif
 
-void PInvokeStubForHost(void)
-{ 
-    // Hosted P/Invoke is not implemented on ARM. See ARMTODO in code:CorHost2::SetHostControl.
-    UNREACHABLE();
-}
-
 class UMEntryThunk * UMEntryThunk::Decode(void *pCallback)
 {
     _ASSERTE(offsetof(UMEntryThunkCode, m_code) == 0);
@@ -2647,7 +2641,7 @@ void InitJITHelpers1()
         ))
     {
 
-        _ASSERTE(GCHeapUtilities::UseAllocationContexts());
+        _ASSERTE(GCHeapUtilities::UseThreadAllocationContexts());
         // If the TLS for Thread is low enough use the super-fast helpers
         if (gThreadTLSIndex < TLS_MINIMUM_AVAILABLE)
         {

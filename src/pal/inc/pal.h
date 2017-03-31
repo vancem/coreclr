@@ -538,7 +538,6 @@ PAL_ProbeMemory(
     BOOL fWriteAccess);
 
 /******************* winuser.h Entrypoints *******************************/
-
 PALIMPORT
 LPSTR
 PALAPI
@@ -1794,6 +1793,15 @@ typedef struct _CONTEXT {
 // support any other values in the ExtendedRegisters) but we might as well be as accurate as we can.
 #define CONTEXT_EXREG_XMM_OFFSET 160
 
+typedef struct _KNONVOLATILE_CONTEXT {
+
+    DWORD Edi;
+    DWORD Esi;
+    DWORD Ebx;
+    DWORD Ebp;
+
+} KNONVOLATILE_CONTEXT, *PKNONVOLATILE_CONTEXT;
+
 typedef struct _KNONVOLATILE_CONTEXT_POINTERS {
 
     // The ordering of these fields should be aligned with that
@@ -2523,6 +2531,16 @@ PALIMPORT
 DWORD
 PALAPI
 PAL_GetLogicalCpuCountFromOS(VOID);
+
+PALIMPORT
+size_t
+PALAPI
+PAL_GetRestrictedPhysicalMemoryLimit(VOID);
+
+PALIMPORT
+BOOL
+PALAPI
+PAL_GetWorkingSetSize(size_t* val);
 
 PALIMPORT
 size_t

@@ -189,7 +189,7 @@ namespace System.Text
             // (If they were all invalid chars, this would actually be wrong,
             // but that's a ridiculously large # so we're not concerned about that case)
             if (byteCount < 0)
-                throw new ArgumentOutOfRangeException(nameof(count), Environment.GetResourceString("ArgumentOutOfRange_GetByteCountOverflow"));
+                throw new ArgumentOutOfRangeException(nameof(count), SR.ArgumentOutOfRange_GetByteCountOverflow);
 
             char* charStart = chars;
             char* charEnd = chars + count;
@@ -204,6 +204,7 @@ namespace System.Text
 
             // For fallback we may need a fallback buffer
             EncoderFallbackBuffer fallbackBuffer = null;
+            char* charsForFallback;
 
             if (encoder != null)
             {
@@ -218,8 +219,7 @@ namespace System.Text
                 {
                     fallbackBuffer = encoder.FallbackBuffer;
                     if (fallbackBuffer.Remaining > 0)
-                        throw new ArgumentException(Environment.GetResourceString("Argument_EncoderFallbackNotEmpty",
-                        this.EncodingName, encoder.Fallback.GetType()));
+                        throw new ArgumentException(SR.Format(SR.Argument_EncoderFallbackNotEmpty, this.EncodingName, encoder.Fallback.GetType()));
 
                     // Set our internal fallback interesting things.
                     fallbackBuffer.InternalInitialize(charStart, charEnd, encoder, false);
@@ -349,7 +349,9 @@ namespace System.Text
                                 fallbackBuffer.InternalInitialize(charStart, charEnd, encoder, false);
                             }
 
-                            fallbackBuffer.InternalFallback(charLeftOver, ref chars);
+                            charsForFallback = chars; // Avoid passing chars by reference to allow it to be enregistered
+                            fallbackBuffer.InternalFallback(charLeftOver, ref charsForFallback);
+                            chars = charsForFallback;
 
                             // Now no high surrogate left over
                             charLeftOver = (char)0;
@@ -381,7 +383,9 @@ namespace System.Text
                             // Set our internal fallback interesting things.
                             fallbackBuffer.InternalInitialize(charStart, charEnd, encoder, false);
                         }
-                        fallbackBuffer.InternalFallback(ch, ref chars);
+                        charsForFallback = chars; // Avoid passing chars by reference to allow it to be enregistered
+                        fallbackBuffer.InternalFallback(ch, ref charsForFallback);
+                        chars = charsForFallback;
                         continue;
                     }
 
@@ -412,7 +416,9 @@ namespace System.Text
                         // Set our internal fallback interesting things.
                         fallbackBuffer.InternalInitialize(charStart, charEnd, encoder, false);
                     }
-                    fallbackBuffer.InternalFallback(charLeftOver, ref chars);
+                    charsForFallback = chars; // Avoid passing chars by reference to allow it to be enregistered
+                    fallbackBuffer.InternalFallback(charLeftOver, ref charsForFallback);
+                    chars = charsForFallback;
 
                     // Ignore charLeftOver or throw
                     byteCount -= 2;
@@ -436,8 +442,7 @@ namespace System.Text
                     {
                         // Throw it, using our complete character
                         throw new ArgumentException(
-                                    Environment.GetResourceString("Argument_RecursiveFallback",
-                                    charLeftOver), nameof(chars));
+                            SR.Format(SR.Argument_RecursiveFallback, charLeftOver), nameof(chars));
                     }
                     else
                     {
@@ -452,7 +457,9 @@ namespace System.Text
                             // Set our internal fallback interesting things.
                             fallbackBuffer.InternalInitialize(charStart, charEnd, encoder, false);
                         }
-                        fallbackBuffer.InternalFallback(charLeftOver, ref chars);
+                        charsForFallback = chars; // Avoid passing chars by reference to allow it to be enregistered
+                        fallbackBuffer.InternalFallback(charLeftOver, ref charsForFallback);
+                        chars = charsForFallback;
                         charLeftOver = (char)0;
                         wasHereBefore = true;
                         goto TryAgain;
@@ -489,6 +496,7 @@ namespace System.Text
 
             // For fallback we may need a fallback buffer
             EncoderFallbackBuffer fallbackBuffer = null;
+            char* charsForFallback;
 
             // Get our encoder, but don't clear it yet.
             if (encoder != null)
@@ -501,8 +509,7 @@ namespace System.Text
                     // We always need the fallback buffer in get bytes so we can flush any remaining ones if necessary
                     fallbackBuffer = encoder.FallbackBuffer;
                     if (fallbackBuffer.Remaining > 0 && encoder.m_throwOnOverflow)
-                        throw new ArgumentException(Environment.GetResourceString("Argument_EncoderFallbackNotEmpty",
-                        this.EncodingName, encoder.Fallback.GetType()));
+                        throw new ArgumentException(SR.Format(SR.Argument_EncoderFallbackNotEmpty, this.EncodingName, encoder.Fallback.GetType()));
 
                     // Set our internal fallback interesting things.
                     fallbackBuffer.InternalInitialize(charStart, charEnd, encoder, false);
@@ -695,7 +702,9 @@ namespace System.Text
                                 fallbackBuffer.InternalInitialize(charStart, charEnd, encoder, true);
                             }
 
-                            fallbackBuffer.InternalFallback(charLeftOver, ref chars);
+                            charsForFallback = chars; // Avoid passing chars by reference to allow it to be enregistered
+                            fallbackBuffer.InternalFallback(charLeftOver, ref charsForFallback);
+                            chars = charsForFallback;
 
                             charLeftOver = (char)0;
                             continue;
@@ -722,7 +731,9 @@ namespace System.Text
                             fallbackBuffer.InternalInitialize(charStart, charEnd, encoder, true);
                         }
 
-                        fallbackBuffer.InternalFallback(ch, ref chars);
+                        charsForFallback = chars; // Avoid passing chars by reference to allow it to be enregistered
+                        fallbackBuffer.InternalFallback(ch, ref charsForFallback);
+                        chars = charsForFallback;
                         continue;
                     }
 
@@ -790,7 +801,9 @@ namespace System.Text
                         fallbackBuffer.InternalInitialize(charStart, charEnd, encoder, true);
                     }
 
-                    fallbackBuffer.InternalFallback(charLeftOver, ref chars);
+                    charsForFallback = chars; // Avoid passing chars by reference to allow it to be enregistered
+                    fallbackBuffer.InternalFallback(charLeftOver, ref charsForFallback);
+                    chars = charsForFallback;
 
                     // Ignore charLeftOver or throw
                     charLeftOver = (char)0;
@@ -837,8 +850,7 @@ namespace System.Text
                     {
                         // Throw it, using our complete character
                         throw new ArgumentException(
-                                    Environment.GetResourceString("Argument_RecursiveFallback",
-                                    charLeftOver), nameof(chars));
+                            SR.Format(SR.Argument_RecursiveFallback, charLeftOver), nameof(chars));
                     }
                     else
                     {
@@ -856,7 +868,9 @@ namespace System.Text
                         }
 
                         // If we're not flushing, this'll remember the left over character.
-                        fallbackBuffer.InternalFallback(charLeftOver, ref chars);
+                        charsForFallback = chars; // Avoid passing chars by reference to allow it to be enregistered
+                        fallbackBuffer.InternalFallback(charLeftOver, ref charsForFallback);
+                        chars = charsForFallback;
 
                         charLeftOver = (char)0;
                         wasHereBefore = true;
@@ -1249,6 +1263,7 @@ namespace System.Text
 
             // For fallback we may need a fallback buffer
             DecoderFallbackBuffer fallbackBuffer = null;
+            char* charsForFallback;
 
             byte* byteEnd = bytes + byteCount;
             char* charEnd = chars + charCount;
@@ -1396,7 +1411,11 @@ namespace System.Text
                                 fallbackBuffer.InternalInitialize(byteStart, charEnd);
                             }
 
-                            if (!fallbackBuffer.InternalFallback(byteBuffer, bytes, ref chars))
+                            charsForFallback = chars; // Avoid passing chars by reference to allow it to be enregistered
+                            bool fallbackResult = fallbackBuffer.InternalFallback(byteBuffer, bytes, ref charsForFallback);
+                            chars = charsForFallback;
+
+                            if (!fallbackResult)
                             {
                                 // couldn't fall back lonely surrogate
                                 // We either advanced bytes or chars should == charStart and throw below
@@ -1444,7 +1463,11 @@ namespace System.Text
                             fallbackBuffer.InternalInitialize(byteStart, charEnd);
                         }
 
-                        if (!fallbackBuffer.InternalFallback(byteBuffer, bytes, ref chars))
+                        charsForFallback = chars; // Avoid passing chars by reference to allow it to be enregistered
+                        bool fallbackResult = fallbackBuffer.InternalFallback(byteBuffer, bytes, ref charsForFallback);
+                        chars = charsForFallback;
+
+                        if (!fallbackResult)
                         {
                             // couldn't fall back lonely surrogate
                             // We either advanced bytes or chars should == charStart and throw below
@@ -1502,7 +1525,11 @@ namespace System.Text
                         fallbackBuffer.InternalInitialize(byteStart, charEnd);
                     }
 
-                    if (!fallbackBuffer.InternalFallback(byteBuffer, bytes, ref chars))
+                    charsForFallback = chars; // Avoid passing chars by reference to allow it to be enregistered
+                    bool fallbackResult = fallbackBuffer.InternalFallback(byteBuffer, bytes, ref charsForFallback);
+                    chars = charsForFallback;
+
+                    if (!fallbackResult)
                     {
                         // couldn't fall back high surrogate, or char that would be next
                         // We either advanced bytes or chars should == charStart and throw below
@@ -1563,7 +1590,11 @@ namespace System.Text
                         fallbackBuffer.InternalInitialize(byteStart, charEnd);
                     }
 
-                    if (!fallbackBuffer.InternalFallback(byteBuffer, bytes, ref chars))
+                    charsForFallback = chars; // Avoid passing chars by reference to allow it to be enregistered
+                    bool fallbackResult = fallbackBuffer.InternalFallback(byteBuffer, bytes, ref charsForFallback);
+                    chars = charsForFallback;
+
+                    if (!fallbackResult)
                     {
                         // 2 bytes couldn't fall back
                         // We either advanced bytes or chars should == charStart and throw below
@@ -1599,7 +1630,11 @@ namespace System.Text
                     }
 
                     // No hanging odd bytes allowed if must flush
-                    if (!fallbackBuffer.InternalFallback(new byte[] { unchecked((byte)lastByte) }, bytes, ref chars))
+                    charsForFallback = chars; // Avoid passing chars by reference to allow it to be enregistered
+                    bool fallbackResult = fallbackBuffer.InternalFallback(new byte[] { unchecked((byte)lastByte) }, bytes, ref charsForFallback);
+                    chars = charsForFallback;
+
+                    if (!fallbackResult)
                     {
                         // odd byte couldn't fall back
                         bytes--;                                        // didn't use this byte
@@ -1673,7 +1708,7 @@ namespace System.Text
         {
             if (charCount < 0)
                 throw new ArgumentOutOfRangeException(nameof(charCount),
-                     Environment.GetResourceString("ArgumentOutOfRange_NeedNonNegNum"));
+                     SR.ArgumentOutOfRange_NeedNonNegNum);
             Contract.EndContractBlock();
 
             // Characters would be # of characters + 1 in case left over high surrogate is ? * max fallback
@@ -1686,7 +1721,7 @@ namespace System.Text
             byteCount <<= 1;
 
             if (byteCount > 0x7fffffff)
-                throw new ArgumentOutOfRangeException(nameof(charCount), Environment.GetResourceString("ArgumentOutOfRange_GetByteCountOverflow"));
+                throw new ArgumentOutOfRangeException(nameof(charCount), SR.ArgumentOutOfRange_GetByteCountOverflow);
 
             return (int)byteCount;
         }
@@ -1696,7 +1731,7 @@ namespace System.Text
         {
             if (byteCount < 0)
                 throw new ArgumentOutOfRangeException(nameof(byteCount),
-                     Environment.GetResourceString("ArgumentOutOfRange_NeedNonNegNum"));
+                     SR.ArgumentOutOfRange_NeedNonNegNum);
             Contract.EndContractBlock();
 
             // long because byteCount could be biggest int.
@@ -1710,7 +1745,7 @@ namespace System.Text
                 charCount *= DecoderFallback.MaxCharCount;
 
             if (charCount > 0x7fffffff)
-                throw new ArgumentOutOfRangeException(nameof(byteCount), Environment.GetResourceString("ArgumentOutOfRange_GetCharCountOverflow"));
+                throw new ArgumentOutOfRangeException(nameof(byteCount), SR.ArgumentOutOfRange_GetCharCountOverflow);
 
             return (int)charCount;
         }
@@ -1742,7 +1777,7 @@ namespace System.Text
         }
 
         [Serializable]
-        private class Decoder : System.Text.DecoderNLS, ISerializable
+        private sealed class Decoder : System.Text.DecoderNLS, ISerializable
         {
             internal int lastByte = -1;
             internal char lastChar = '\0';

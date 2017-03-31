@@ -32,7 +32,7 @@ VNFunc GetVNFuncForOper(genTreeOps oper, bool isUnsigned)
         case GT_LE:
             return VNF_LE_UN;
         case GT_GE:
-            return VNF_GT_UN;
+            return VNF_GE_UN;
         case GT_GT:
             return VNF_GT_UN;
         case GT_ADD:
@@ -3161,6 +3161,53 @@ void ValueNumStore::GetConstantBoundInfo(ValueNum vn, ConstantBoundInfo* info)
         info->cmpOpVN  = funcAttr.m_args[1];
         info->constVal = GetConstantInt32(funcAttr.m_args[0]);
     }
+}
+
+//------------------------------------------------------------------------
+// IsVNArrLenUnsignedBound: Checks if the specified vn represents an expression
+//    such as "(uint)i < (uint)a.len" that implies that the array index is valid
+//    (0 <= i && i < a.len).
+//
+// Arguments:
+//    vn - Value number to query
+//    info - Pointer to an ArrLenUnsignedBoundInfo object to return information about
+//           the expression. Not populated if the vn expression isn't suitable (e.g. i <= a.len).
+//           This enables optCreateJTrueBoundAssertion to immediatly create an OAK_NO_THROW
+//           assertion instead of the OAK_EQUAL/NOT_EQUAL assertions created by signed compares
+//           (IsVNArrLenBound, IsVNArrLenArithBound) that require further processing.
+
+bool ValueNumStore::IsVNArrLenUnsignedBound(ValueNum vn, ArrLenUnsignedBoundInfo* info)
+{
+    VNFuncApp funcApp;
+
+    if (GetVNFunc(vn, &funcApp))
+    {
+        if ((funcApp.m_func == VNF_LT_UN) || (funcApp.m_func == VNF_GE_UN))
+        {
+            // We only care about "(uint)i < (uint)a.len" and its negation "(uint)i >= (uint)a.len"
+            if (IsVNArrLen(funcApp.m_args[1]))
+            {
+                info->vnIdx   = funcApp.m_args[0];
+                info->cmpOper = funcApp.m_func;
+                info->vnLen   = funcApp.m_args[1];
+                return true;
+            }
+        }
+        else if ((funcApp.m_func == VNF_GT_UN) || (funcApp.m_func == VNF_LE_UN))
+        {
+            // We only care about "(uint)a.len > (uint)i" and its negation "(uint)a.len <= (uint)i"
+            if (IsVNArrLen(funcApp.m_args[0]))
+            {
+                info->vnIdx = funcApp.m_args[1];
+                // Let's keep a consistent operand order - it's always i < a.len, never a.len > i
+                info->cmpOper = (funcApp.m_func == VNF_GT_UN) ? VNF_LT_UN : VNF_GE_UN;
+                info->vnLen   = funcApp.m_args[0];
+                return true;
+            }
+        }
+    }
+
+    return false;
 }
 
 bool ValueNumStore::IsVNArrLenBound(ValueNum vn)
@@ -7544,11 +7591,9 @@ VNFunc Compiler::fgValueNumberHelperMethVNFunc(CorInfoHelpFunc helpFunc)
         case CORINFO_HELP_READYTORUN_STATIC_BASE:
             vnf = VNF_ReadyToRunStaticBase;
             break;
-#if COR_JIT_EE_VERSION > 460
         case CORINFO_HELP_READYTORUN_GENERIC_STATIC_BASE:
             vnf = VNF_ReadyToRunGenericStaticBase;
             break;
-#endif // COR_JIT_EE_VERSION > 460
         case CORINFO_HELP_GETSHARED_GCSTATIC_BASE_DYNAMICCLASS:
             vnf = VNF_GetsharedGcstaticBaseDynamicclass;
             break;

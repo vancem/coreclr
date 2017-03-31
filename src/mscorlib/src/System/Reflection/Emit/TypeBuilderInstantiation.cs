@@ -188,6 +188,9 @@ namespace System.Reflection.Emit
         public override EventInfo[] GetEvents(BindingFlags bindingAttr) { throw new NotSupportedException(); }
         public override MemberInfo[] GetMembers(BindingFlags bindingAttr) { throw new NotSupportedException(); }
         protected override TypeAttributes GetAttributeFlagsImpl() { return m_type.Attributes; }
+
+        public override bool IsSZArray => false;
+
         protected override bool IsArrayImpl() { return false; }
         protected override bool IsByRefImpl() { return false; }
         protected override bool IsPointerImpl() { return false; }
@@ -218,7 +221,7 @@ namespace System.Reflection.Emit
         }
         public override MethodBase DeclaringMethod { get { return null; } }
         public override Type GetGenericTypeDefinition() { return m_type; }
-        public override Type MakeGenericType(params Type[] inst) { throw new InvalidOperationException(Environment.GetResourceString("Arg_NotGenericTypeDefinition")); }
+        public override Type MakeGenericType(params Type[] inst) { throw new InvalidOperationException(SR.Arg_NotGenericTypeDefinition); }
         public override bool IsAssignableFrom(Type c) { throw new NotSupportedException(); }
 
         [Pure]

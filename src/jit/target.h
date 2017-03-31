@@ -6,25 +6,11 @@
 #ifndef _TARGET_H_
 #define _TARGET_H_
 
-// If the UNIX_AMD64_ABI is defined make sure that _TARGET_AMD64_ is also defined.
-#if defined(UNIX_AMD64_ABI)
-#if !defined(_TARGET_AMD64_)
-#error When UNIX_AMD64_ABI is defined you must define _TARGET_AMD64_ defined as well.
-#endif
-#endif
-
-// If the UNIX_X86_ABI is defined make sure that _TARGET_X86_ is also defined.
-#if defined(UNIX_X86_ABI)
-#if !defined(_TARGET_X86_)
-#error When UNIX_X86_ABI is defined you must define _TARGET_X86_ defined as well.
-#endif
-#endif
-
-#if (defined(FEATURE_CORECLR) && defined(PLATFORM_UNIX))
+#if defined(FEATURE_CORECLR) && defined(_TARGET_UNIX_)
 #define FEATURE_VARARG 0
-#else // !(defined(FEATURE_CORECLR) && defined(PLATFORM_UNIX))
+#else // !(defined(FEATURE_CORECLR) && defined(_TARGET_UNIX_))
 #define FEATURE_VARARG 1
-#endif // !(defined(FEATURE_CORECLR) && defined(PLATFORM_UNIX))
+#endif // !(defined(FEATURE_CORECLR) && defined(_TARGET_UNIX_))
 
 /*****************************************************************************/
 // The following are human readable names for the target architectures
@@ -1446,7 +1432,7 @@ typedef unsigned short regPairNoSmall; // arm: need 12 bits
   #define RBM_STOP_FOR_GC_TRASH     (RBM_CALLEE_TRASH & ~(RBM_FLOATRET | RBM_INTRET))
 
   // The registers trashed by the CORINFO_HELP_INIT_PINVOKE_FRAME helper.
-  #define RBM_INIT_PINVOKE_FRAME_TRASH  RBM_CALLEE_TRASH
+  #define RBM_INIT_PINVOKE_FRAME_TRASH (RBM_CALLEE_TRASH | RBM_PINVOKE_TCB | RBM_PINVOKE_SCRATCH)
 
   #define REG_FPBASE               REG_R11
   #define RBM_FPBASE               RBM_R11

@@ -105,7 +105,7 @@ STDAPI NGenWorker(LPCWSTR pwzFilename, DWORD dwFlags, LPCWSTR pwzPlatformAssembl
         ngo.fDebug = false;
         ngo.fDebugOpt = false;
         ngo.fProf = false;
-        ngo.fSilent = false;
+        ngo.fSilent = (dwFlags & NGENWORKER_FLAGS_SILENT) != 0;
         ngo.lpszExecutableFileName = pwzFilename;
 
         // V2 (Whidbey)
@@ -1657,19 +1657,16 @@ ZapImage * Zapper::CompileModule(CORINFO_MODULE_HANDLE hModule,
 
     module->Compile();
 
-    if (IsReadyToRunCompilation())
+    if (!IsReadyToRunCompilation())
     {
-        return module.Extract();
+        //
+        // Link preloaded module.
+        //
+
+        Info(W("Linking preloaded input file %s\n"), module->m_pModuleFileName);
+
+        module->LinkPreload();
     }
-
-    //
-    // Link preloaded module.
-    //
-
-    Info(W("Linking preloaded input file %s\n"), module->m_pModuleFileName);
-
-    module->LinkPreload();
-
     return module.Extract();
 }
 

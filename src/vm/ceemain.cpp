@@ -39,25 +39,25 @@
 // 
 //*************************************************************************************************
 //
-// * Introduction to the rutnime file:../../doc/BookOfTheRuntime/Introduction/BOTR%20Introduction.docx 
+// * Introduction to the runtime file:../../Documentation/botr/botr-faq.md
 //
 // #MajorDataStructures. The major data structures associated with the runtime are
 //     * code:Thread (see file:threads.h#ThreadClass) - the additional thread state the runtime needs.
 //     * code:AppDomain - The managed version of a process
-//     * code:Assembly - The unit of deployment and versioing (may be several DLLs but often is only one).
-//     * code:Module -represents a Module (DLL or EXE).
+//     * code:Assembly - The unit of deployment and versioning (may be several DLLs but often is only one).
+//     * code:Module - represents a Module (DLL or EXE).
 //     * code:MethodTable - represents the 'hot' part of a type (needed during normal execution)
 //     * code:EEClass - represents the 'cold' part of a type (used during compilation, interop, ...)
 //     * code:MethodDesc - represents a Method
 //     * code:FieldDesc - represents a Field.
-//     * code:Object - represents a object on the GC heap alloated with code:Alloc 
+//     * code:Object - represents a object on the GC heap allocated with code:Alloc 
 // 
 // * ECMA specifications
 //     * Partition I Concepts
 //         http://download.microsoft.com/download/D/C/1/DC1B219F-3B11-4A05-9DA3-2D0F98B20917/Partition%20I%20Architecture.doc
 //     * Partition II Meta Data
 //         http://download.microsoft.com/download/D/C/1/DC1B219F-3B11-4A05-9DA3-2D0F98B20917/Partition%20II%20Metadata.doc
-//     * Parition III IL
+//     * Partition III IL
 //         http://download.microsoft.com/download/D/C/1/DC1B219F-3B11-4A05-9DA3-2D0F98B20917/Partition%20III%20CIL.doc
 //  
 //  * Serge Liden (worked on the CLR and owned ILASM / ILDASM for a long time wrote a good book on IL
@@ -76,7 +76,7 @@
 // * code:ICorJitCompiler#EEToJitInterface - This is the interface from the the EE to the Just in time (JIT)
 //     compiler. The interface to the JIT is relatively simple (compileMethod), however the EE provides a
 //     rich set of callbacks so the JIT can get all the information it needs. See also
-//     file:../../doc/BookOfTheRuntime/JIT/JIT%20Design.doc for general information on the JIT.
+//     file:../../Documentation/botr/ryujit-overview.md for general information on the JIT.
 // 
 // * code:VirtualCallStubManager - This is the main class that implements interface dispatch
 // 
@@ -85,36 +85,22 @@
 //     and will call the JIT compiler if the code does not yet exist.
 //     
 //  * NGEN - NGen stands for Native code GENeration and it is the runtime way of precomiling IL and IL
-//      Meta-data into native code and runtime data structures. See
-//      file:../../doc/BookOfTheRuntime/NGEN/NGENDesign.doc for an overview. At compilation time the most
+//      Meta-data into native code and runtime data structures. At compilation time the most
 //      fundamental data structures is the code:ZapNode which represents something that needs to go into the
 //      NGEN image.
 //      
 //   * What is cooperative / preemtive mode ? file:threads.h#CooperativeMode and
-//       file:threads.h#SuspendingTheRuntime
-//   * Garbage collection - file:gc.cpp#Overview
+//       file:threads.h#SuspendingTheRuntime and file:../../Documentation/botr/threading.md
+//   * Garbage collection - file:gc.cpp#Overview and file:../../Documentation/botr/garbage-collection.md
 //   * code:AppDomain - The managed version of a process.
-//   * Calling Into the runtime (FCALLs QCalls) file:../../doc/BookOfTheRuntime/mscorlib/mscorlibDesign.doc
-//   * Exceptions - file:../../doc/BookOfTheRuntime/ManagedEH\Design.doc. The most important routine to start
-//       with is code:COMPlusFrameHandler which is the routine that we hook up to get called when an unanaged
+//   * Calling Into the runtime (FCALLs QCalls) file:../../Documentation/botr/mscorlib.md
+//   * Exceptions - file:../../Documentation/botr/exceptions.md. The most important routine to start
+//       with is code:COMPlusFrameHandler which is the routine that we hook up to get called when an unmanaged
 //       exception happens.
-//   * Constrain Execution Regions (reliability) file:../../doc/BookOfTheRuntime/CER/CERDesign.doc)
-//   * Assembly Loading file:../../doc/BookOfTheRuntime/AssemblyLoader/AssemblyLoader.doc
-//   * Fusion and loading files file:../../doc/BookOfTheRuntime/AssemblyLoader/FusionDesign.doc
-//   * Strings file:../../doc/BookOfTheRuntime/BCL/SystemStringDesign.doc
-//   * Profiling file:../../doc/BookOfTheRuntime/DiagnosticServices/ProfilingAPIDesign.doc
-//   * Remoting file:../../doc/BookOfTheRuntime/EERemotingSupport/RemotingDesign.doc
-//   * Managed Debug Assitants file:../../doc/BookOfTheRuntime/MDA/MDADesign.doc
+//   * Assembly Loading file:../../Documentation/botr/type-loader.md
+//   * Profiling file:../../Documentation/botr/profiling.md and file:../../Documentation/botr/profilability.md
 //   * FCALLS QCALLS (calling into the runtime from managed code)
-//       file:../../doc/BookOfTheRuntime/Mscorlib/MscorlibDesign.doc
-//   * Reflection file:../../doc/BookOfTheRuntime/Reflection/ReflectionDesign.doc
-//   * Security
-//     * file:../../doc/BookOfTheRuntime/RuntimeSecurity/RuntimeSecurityDesign.doc
-//     * file:../../doc/BookOfTheRuntime/LoadtimeSecurity/DeclarativeSecurity-Design.doc
-//     * file:../../doc/BookOfTheRuntime/LoadtimeSecurity/StrongName.doc
-//     * file:../../doc/BookOfTheRuntime/RuntimeSecurity/ClickOnce Activation.doc
-//     * file:../../doc/BookOfTheRuntime/RuntimeSecurity/Cryptography.doc
-//     * file:../../doc/BookOfTheRuntime/RuntimeSecurity/DemandEvalDesign.doc
+//       file:../../Documentation/botr/mscorlib.md
 //   * Event Tracing for Windows
 //     * file:../inc/eventtrace.h#EventTracing -
 //     * This is the main file dealing with event tracing in CLR
@@ -596,6 +582,23 @@ void InitGSCookie()
     }
 }
 
+Volatile<BOOL> g_bIsGarbageCollectorFullyInitialized = FALSE;
+
+void SetGarbageCollectorFullyInitialized()
+{
+    LIMITED_METHOD_CONTRACT;
+
+    g_bIsGarbageCollectorFullyInitialized = TRUE;
+}
+
+// Tells whether the garbage collector is fully initialized
+// Stronger than IsGCHeapInitialized
+BOOL IsGarbageCollectorFullyInitialized()
+{
+    LIMITED_METHOD_CONTRACT;
+
+    return g_bIsGarbageCollectorFullyInitialized;
+}
 
 // ---------------------------------------------------------------------------
 // %%Function: EEStartupHelper
@@ -795,9 +798,8 @@ void EEStartupHelper(COINITIEE fFlags)
 
 
 #ifdef FEATURE_PREJIT
-        // Initialize the sweeper thread.  THis is violating our rules with hosting
-        // so we only do it in the non-hosted case
-        if (g_pConfig->GetZapBBInstr() != NULL && !CLRTaskHosted())
+        // Initialize the sweeper thread.
+        if (g_pConfig->GetZapBBInstr() != NULL)
         {
             DWORD threadID;
             HANDLE hBBSweepThread = ::CreateThread(NULL,
@@ -860,19 +862,20 @@ void EEStartupHelper(COINITIEE fFlags)
 
 #ifndef CROSSGEN_COMPILE
 
+        InitializeGarbageCollector();
+
         // Initialize remoting
 
-        // weak_short, weak_long, strong; no pin
-        if (!Ref_Initialize())
+        if (!GCHeapUtilities::GetGCHandleTable()->Initialize())
+        {
             IfFailGo(E_OUTOFMEMORY);
+        }
 
         // Initialize contexts
         Context::Initialize();
 
         g_pEEShutDownEvent = new CLREvent();
         g_pEEShutDownEvent->CreateManualEvent(FALSE);
-
-
 
 #ifdef FEATURE_IPCMAN
         // Initialize CCLRSecurityAttributeManager
@@ -882,7 +885,6 @@ void EEStartupHelper(COINITIEE fFlags)
         VirtualCallStubManager::InitStatic();
 
         GCInterface::m_MemoryPressureLock.Init(CrstGCMemoryPressure);
-
 
 #endif // CROSSGEN_COMPILE
 
@@ -901,6 +903,10 @@ void EEStartupHelper(COINITIEE fFlags)
         ExecutionManager::Init();
 
 #ifndef CROSSGEN_COMPILE
+
+        // This isn't done as part of InitializeGarbageCollector() above because thread
+        // creation requires AppDomains to have been set up.
+        FinalizerThread::FinalizerThreadCreate();
 
 #ifndef FEATURE_PAL
         // Watson initialization must precede InitializeDebugger() and InstallUnhandledExceptionFilter() 
@@ -1005,7 +1011,14 @@ void EEStartupHelper(COINITIEE fFlags)
         }
 #endif
 
-        InitializeGarbageCollector();
+        // This isn't done as part of InitializeGarbageCollector() above because it
+        // requires write barriers to have been set up on x86, which happens as part
+        // of InitJITHelpers1.
+        hr = g_pGCHeap->Initialize();
+        IfFailGo(hr);
+
+        // Now we really have fully initialized the garbage collector
+        SetGarbageCollectorFullyInitialized();
 
         InitializePinHandleTable();
 
@@ -1843,7 +1856,7 @@ part2:
 #ifdef SHOULD_WE_CLEANUP
                 if (!g_fFastExitProcess)
                 {
-                    Ref_Shutdown(); // shut down the handle table
+                    GCHeapUtilities::GetGCHandleTable()->Shutdown();
                 }
 #endif /* SHOULD_WE_CLEANUP */
 
@@ -2393,11 +2406,6 @@ void STDMETHODCALLTYPE CoUninitializeEE(BOOL fIsDllUnloading)
 
 }
 
-
-
-
-
-
 //*****************************************************************************
 BOOL ExecuteDLL_ReturnOrThrow(HRESULT hr, BOOL fFromThunk)
 {
@@ -2415,28 +2423,6 @@ BOOL ExecuteDLL_ReturnOrThrow(HRESULT hr, BOOL fFromThunk)
         COMPlusThrowHR(hr);
     }
     return SUCCEEDED(hr);
-}
-
-
-
-
-
-Volatile<BOOL> g_bIsGarbageCollectorFullyInitialized = FALSE;
-    
-void SetGarbageCollectorFullyInitialized()
-{
-    LIMITED_METHOD_CONTRACT;
-    
-    g_bIsGarbageCollectorFullyInitialized = TRUE;
-}
-
-// Tells whether the garbage collector is fully initialized
-// Stronger than IsGCHeapInitialized
-BOOL IsGarbageCollectorFullyInitialized()
-{
-    LIMITED_METHOD_CONTRACT;      
-
-    return g_bIsGarbageCollectorFullyInitialized;
 }
 
 //
@@ -2473,15 +2459,17 @@ void InitializeGarbageCollector()
     IGCToCLR* gcToClr = nullptr;
 #endif
 
+    IGCHandleTable *pGcHandleTable;
 
     IGCHeap *pGCHeap;
-    if (!InitializeGarbageCollector(gcToClr, &pGCHeap, &g_gc_dac_vars)) 
+    if (!InitializeGarbageCollector(gcToClr, &pGCHeap, &pGcHandleTable, &g_gc_dac_vars)) 
     {
         ThrowOutOfMemory();
     }
 
     assert(pGCHeap != nullptr);
     g_pGCHeap = pGCHeap;
+    g_pGCHandleTable = pGcHandleTable;
     g_gcDacGlobals = &g_gc_dac_vars;
 
     // Apparently the Windows linker removes global variables if they are never
@@ -2489,15 +2477,6 @@ void InitializeGarbageCollector()
     // only the DAC will read from it. This forces the linker to include
     // g_gcDacGlobals.
     volatile void* _dummy = g_gcDacGlobals;
-
-    hr = pGCHeap->Initialize();
-    IfFailThrow(hr);
-
-    // Thread for running finalizers...
-    FinalizerThread::FinalizerThreadCreate();
-
-    // Now we really have fully initialized the garbage collector
-    SetGarbageCollectorFullyInitialized();
 }
 
 /*****************************************************************************/
@@ -2667,16 +2646,7 @@ BOOL STDMETHODCALLTYPE EEDllMain( // TRUE on success, FALSE on error.
 
     if (dwReason == DLL_THREAD_DETACH || dwReason == DLL_PROCESS_DETACH)
     {
-        if (CLRMemoryHosted())
-        {
-            // A host may not support memory operation inside OS loader lock.
-            // We will free these memory on finalizer thread.
-            CExecutionEngine::DetachTlsInfo(param.pTlsData);
-        }
-        else
-        {
-            CExecutionEngine::ThreadDetaching(param.pTlsData);
-        }
+        CExecutionEngine::ThreadDetaching(param.pTlsData);
     }
     return TRUE;
 }

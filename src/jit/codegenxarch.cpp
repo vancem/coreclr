@@ -1266,8 +1266,7 @@ void CodeGen::genCodeForTreeNode(GenTreePtr treeNode)
     if (compiler->verbose)
     {
         unsigned seqNum = treeNode->gtSeqNum; // Useful for setting a conditional break in Visual Studio
-        printf("Generating: ");
-        compiler->gtDispTree(treeNode, nullptr, nullptr, true);
+        compiler->gtDispLIRNode(treeNode, "Generating: ");
     }
 #endif // DEBUG
 
@@ -1315,7 +1314,7 @@ void CodeGen::genCodeForTreeNode(GenTreePtr treeNode)
 
         case GT_CNS_INT:
 #ifdef _TARGET_X86_
-            NYI_IF(treeNode->IsIconHandle(GTF_ICON_TLS_HDL), "TLS constants");
+            assert(!treeNode->IsIconHandle(GTF_ICON_TLS_HDL));
 #endif // _TARGET_X86_
             __fallthrough;
 
@@ -1626,6 +1625,7 @@ void CodeGen::genCodeForTreeNode(GenTreePtr treeNode)
         break;
 
         case GT_IND:
+        {
 #ifdef FEATURE_SIMD
             // Handling of Vector3 type values loaded through indirection.
             if (treeNode->TypeGet() == TYP_SIMD12)
@@ -1635,10 +1635,21 @@ void CodeGen::genCodeForTreeNode(GenTreePtr treeNode)
             }
 #endif // FEATURE_SIMD
 
-            genConsumeAddress(treeNode->AsIndir()->Addr());
-            emit->emitInsMov(ins_Load(treeNode->TypeGet()), emitTypeSize(treeNode), treeNode);
+            GenTree* addr = treeNode->AsIndir()->Addr();
+            if (addr->IsCnsIntOrI() && addr->IsIconHandle(GTF_ICON_TLS_HDL))
+            {
+                noway_assert(EA_ATTR(genTypeSize(treeNode->gtType)) == EA_PTRSIZE);
+                emit->emitIns_R_C(ins_Load(TYP_I_IMPL), EA_PTRSIZE, treeNode->gtRegNum, FLD_GLOBAL_FS,
+                                  (int)addr->gtIntCon.gtIconVal);
+            }
+            else
+            {
+                genConsumeAddress(addr);
+                emit->emitInsMov(ins_Load(treeNode->TypeGet()), emitTypeSize(treeNode), treeNode);
+            }
             genProduceReg(treeNode);
-            break;
+        }
+        break;
 
         case GT_MULHI:
 #ifdef _TARGET_X86_
@@ -2010,7 +2021,7 @@ void CodeGen::genCodeForTreeNode(GenTreePtr treeNode)
         break;
 
         case GT_CALL:
-            genCallInstruction(treeNode);
+            genCallInstruction(treeNode->AsCall());
             break;
 
         case GT_JMP:
@@ -3225,7 +3236,7 @@ void CodeGen::genCodeForCpBlkRepMovs(GenTreeBlk* cpBlkNode)
 //    On x86, longTmpReg must be an xmm reg; on x64 it must be an integer register.
 //    This is checked by genStoreRegToStackArg.
 //
-int CodeGen::genMove8IfNeeded(unsigned size, regNumber longTmpReg, GenTree* srcAddr, unsigned offset)
+unsigned CodeGen::genMove8IfNeeded(unsigned size, regNumber longTmpReg, GenTree* srcAddr, unsigned offset)
 {
 #ifdef _TARGET_X86_
     instruction longMovIns = INS_movq;
@@ -3259,7 +3270,7 @@ int CodeGen::genMove8IfNeeded(unsigned size, regNumber longTmpReg, GenTree* srcA
 //    intTmpReg must be an integer register.
 //    This is checked by genStoreRegToStackArg.
 //
-int CodeGen::genMove4IfNeeded(unsigned size, regNumber intTmpReg, GenTree* srcAddr, unsigned offset)
+unsigned CodeGen::genMove4IfNeeded(unsigned size, regNumber intTmpReg, GenTree* srcAddr, unsigned offset)
 {
     if ((size & 4) != 0)
     {
@@ -3288,7 +3299,7 @@ int CodeGen::genMove4IfNeeded(unsigned size, regNumber intTmpReg, GenTree* srcAd
 //    intTmpReg must be an integer register.
 //    This is checked by genStoreRegToStackArg.
 //
-int CodeGen::genMove2IfNeeded(unsigned size, regNumber intTmpReg, GenTree* srcAddr, unsigned offset)
+unsigned CodeGen::genMove2IfNeeded(unsigned size, regNumber intTmpReg, GenTree* srcAddr, unsigned offset)
 {
     if ((size & 2) != 0)
     {
@@ -3317,7 +3328,7 @@ int CodeGen::genMove2IfNeeded(unsigned size, regNumber intTmpReg, GenTree* srcAd
 //    intTmpReg must be an integer register.
 //    This is checked by genStoreRegToStackArg.
 //
-int CodeGen::genMove1IfNeeded(unsigned size, regNumber intTmpReg, GenTree* srcAddr, unsigned offset)
+unsigned CodeGen::genMove1IfNeeded(unsigned size, regNumber intTmpReg, GenTree* srcAddr, unsigned offset)
 {
 
     if ((size & 1) != 0)
@@ -3354,7 +3365,7 @@ void CodeGen::genStructPutArgUnroll(GenTreePutArgStk* putArgNode)
     GenTreePtr dstAddr = putArgNode;
     GenTreePtr src     = putArgNode->gtOp.gtOp1;
 
-    size_t size = putArgNode->getArgSize();
+    unsigned size = putArgNode->getArgSize();
     assert(size <= CPBLK_UNROLL_LIMIT);
 
     emitter* emit         = getEmitter();
@@ -4751,10 +4762,9 @@ bool CodeGen::genEmitOptimizedGCWriteBarrier(GCInfo::WriteBarrierForm writeBarri
 }
 
 // Produce code for a GT_CALL node
-void CodeGen::genCallInstruction(GenTreePtr node)
+void CodeGen::genCallInstruction(GenTreeCall* call)
 {
-    GenTreeCall* call = node->AsCall();
-    assert(call->gtOper == GT_CALL);
+    genAlignStackBeforeCall(call);
 
     gtCallTypes callType = (gtCallTypes)call->gtCallType;
 
@@ -4915,7 +4925,7 @@ void CodeGen::genCallInstruction(GenTreePtr node)
     if (callType == CT_INDIRECT)
     {
         assert(target == nullptr);
-        target  = call->gtCall.gtCallAddr;
+        target  = call->gtCallAddr;
         methHnd = nullptr;
     }
     else
@@ -4995,16 +5005,30 @@ void CodeGen::genCallInstruction(GenTreePtr node)
     }
 
 #if defined(_TARGET_X86_)
+    bool fCallerPop = (call->gtFlags & GTF_CALL_POP_ARGS) != 0;
+
+#ifdef UNIX_X86_ABI
+    {
+        CorInfoCallConv callConv = CORINFO_CALLCONV_DEFAULT;
+
+        if ((callType != CT_HELPER) && call->callSig)
+        {
+            callConv = call->callSig->callConv;
+        }
+
+        fCallerPop |= IsCallerPop(callConv);
+    }
+#endif // UNIX_X86_ABI
+
     // If the callee pops the arguments, we pass a positive value as the argSize, and the emitter will
     // adjust its stack level accordingly.
     // If the caller needs to explicitly pop its arguments, we must pass a negative value, and then do the
     // pop when we're done.
     ssize_t argSizeForEmitter = stackArgBytes;
-    if ((call->gtFlags & GTF_CALL_POP_ARGS) != 0)
+    if (fCallerPop)
     {
         argSizeForEmitter = -stackArgBytes;
     }
-
 #endif // defined(_TARGET_X86_)
 
 #ifdef FEATURE_AVX_SUPPORT
@@ -5046,11 +5070,20 @@ void CodeGen::genCallInstruction(GenTreePtr node)
             genCopyRegIfNeeded(addr, REG_VIRTUAL_STUB_TARGET);
 
             getEmitter()->emitIns_Nop(3);
-            getEmitter()->emitIns_Call(emitter::EmitCallType(emitter::EC_INDIR_ARD), methHnd,
-                                       INDEBUG_LDISASM_COMMA(sigInfo) nullptr, argSizeForEmitter,
-                                       retSize MULTIREG_HAS_SECOND_GC_RET_ONLY_ARG(secondRetSize),
-                                       gcInfo.gcVarPtrSetCur, gcInfo.gcRegGCrefSetCur, gcInfo.gcRegByrefSetCur,
+
+            // clang-format off
+            getEmitter()->emitIns_Call(emitter::EmitCallType(emitter::EC_INDIR_ARD),
+                                       methHnd,
+                                       INDEBUG_LDISASM_COMMA(sigInfo)
+                                       nullptr,
+                                       argSizeForEmitter,
+                                       retSize
+                                       MULTIREG_HAS_SECOND_GC_RET_ONLY_ARG(secondRetSize),
+                                       gcInfo.gcVarPtrSetCur,
+                                       gcInfo.gcRegGCrefSetCur,
+                                       gcInfo.gcRegByrefSetCur,
                                        ilOffset, REG_VIRTUAL_STUB_TARGET, REG_NA, 1, 0);
+            // clang-format on
         }
         else
 #endif
@@ -5062,18 +5095,29 @@ void CodeGen::genCallInstruction(GenTreePtr node)
                 // contained only if it can be encoded as PC-relative offset.
                 assert(target->AsIndir()->Base()->AsIntConCommon()->FitsInAddrBase(compiler));
 
-                genEmitCall(emitter::EC_FUNC_TOKEN_INDIR, methHnd,
-                            INDEBUG_LDISASM_COMMA(sigInfo)(void*) target->AsIndir()
-                                ->Base()
-                                ->AsIntConCommon()
-                                ->IconValue() X86_ARG(argSizeForEmitter),
-                            retSize MULTIREG_HAS_SECOND_GC_RET_ONLY_ARG(secondRetSize), ilOffset);
+                // clang-format off
+                genEmitCall(emitter::EC_FUNC_TOKEN_INDIR,
+                            methHnd,
+                            INDEBUG_LDISASM_COMMA(sigInfo)
+                            (void*) target->AsIndir()->Base()->AsIntConCommon()->IconValue()
+                            X86_ARG(argSizeForEmitter),
+                            retSize
+                            MULTIREG_HAS_SECOND_GC_RET_ONLY_ARG(secondRetSize),
+                            ilOffset);
+                // clang-format on
             }
             else
             {
-                genEmitCall(emitter::EC_INDIR_ARD, methHnd,
-                            INDEBUG_LDISASM_COMMA(sigInfo) target->AsIndir() X86_ARG(argSizeForEmitter),
-                            retSize MULTIREG_HAS_SECOND_GC_RET_ONLY_ARG(secondRetSize), ilOffset);
+                // clang-format off
+                genEmitCall(emitter::EC_INDIR_ARD,
+                            methHnd,
+                            INDEBUG_LDISASM_COMMA(sigInfo)
+                            target->AsIndir()
+                            X86_ARG(argSizeForEmitter),
+                            retSize
+                            MULTIREG_HAS_SECOND_GC_RET_ONLY_ARG(secondRetSize),
+                            ilOffset);
+                // clang-format on
             }
         }
         else
@@ -5081,19 +5125,34 @@ void CodeGen::genCallInstruction(GenTreePtr node)
             // We have already generated code for gtControlExpr evaluating it into a register.
             // We just need to emit "call reg" in this case.
             assert(genIsValidIntReg(target->gtRegNum));
-            genEmitCall(emitter::EC_INDIR_R, methHnd,
-                        INDEBUG_LDISASM_COMMA(sigInfo) nullptr // addr
+
+            // clang-format off
+            genEmitCall(emitter::EC_INDIR_R,
+                        methHnd,
+                        INDEBUG_LDISASM_COMMA(sigInfo)
+                        nullptr // addr
                         X86_ARG(argSizeForEmitter),
-                        retSize MULTIREG_HAS_SECOND_GC_RET_ONLY_ARG(secondRetSize), ilOffset, genConsumeReg(target));
+                        retSize
+                        MULTIREG_HAS_SECOND_GC_RET_ONLY_ARG(secondRetSize),
+                        ilOffset,
+                        genConsumeReg(target));
+            // clang-format on
         }
     }
 #ifdef FEATURE_READYTORUN_COMPILER
     else if (call->gtEntryPoint.addr != nullptr)
     {
+        // clang-format off
         genEmitCall((call->gtEntryPoint.accessType == IAT_VALUE) ? emitter::EC_FUNC_TOKEN
                                                                  : emitter::EC_FUNC_TOKEN_INDIR,
-                    methHnd, INDEBUG_LDISASM_COMMA(sigInfo)(void*) call->gtEntryPoint.addr X86_ARG(argSizeForEmitter),
-                    retSize MULTIREG_HAS_SECOND_GC_RET_ONLY_ARG(secondRetSize), ilOffset);
+                    methHnd,
+                    INDEBUG_LDISASM_COMMA(sigInfo)
+                    (void*) call->gtEntryPoint.addr
+                    X86_ARG(argSizeForEmitter),
+                    retSize
+                    MULTIREG_HAS_SECOND_GC_RET_ONLY_ARG(secondRetSize),
+                    ilOffset);
+        // clang-format on
     }
 #endif
     else
@@ -5129,18 +5188,18 @@ void CodeGen::genCallInstruction(GenTreePtr node)
         }
 
         // Non-virtual direct calls to known addresses
-        genEmitCall(emitter::EC_FUNC_TOKEN, methHnd, INDEBUG_LDISASM_COMMA(sigInfo) addr X86_ARG(argSizeForEmitter),
-                    retSize MULTIREG_HAS_SECOND_GC_RET_ONLY_ARG(secondRetSize), ilOffset);
-    }
 
-#if defined(UNIX_X86_ABI)
-    // Put back the stack pointer if there was any padding for stack alignment
-    unsigned padStackAlign = call->fgArgInfo->GetPadStackAlign();
-    if (padStackAlign != 0)
-    {
-        inst_RV_IV(INS_add, REG_SPBASE, padStackAlign * TARGET_POINTER_SIZE, EA_PTRSIZE);
+        // clang-format off
+        genEmitCall(emitter::EC_FUNC_TOKEN,
+                    methHnd,
+                    INDEBUG_LDISASM_COMMA(sigInfo)
+                    addr
+                    X86_ARG(argSizeForEmitter),
+                    retSize
+                    MULTIREG_HAS_SECOND_GC_RET_ONLY_ARG(secondRetSize),
+                    ilOffset);
+        // clang-format on
     }
-#endif // UNIX_X86_ABI
 
     // if it was a pinvoke we may have needed to get the address of a label
     if (genPendingCallLabel)
@@ -5149,11 +5208,6 @@ void CodeGen::genCallInstruction(GenTreePtr node)
         genDefineTempLabel(genPendingCallLabel);
         genPendingCallLabel = nullptr;
     }
-
-#if defined(_TARGET_X86_)
-    // The call will pop its arguments.
-    genStackLevel -= stackArgBytes;
-#endif // defined(_TARGET_X86_)
 
     // Update GC info:
     // All Callee arg registers are trashed and no longer contain any GC pointers.
@@ -5255,6 +5309,8 @@ void CodeGen::genCallInstruction(GenTreePtr node)
         gcInfo.gcMarkRegSetNpt(RBM_INTRET);
     }
 
+    unsigned stackAdjustBias = 0;
+
 #if defined(_TARGET_X86_)
     //-------------------------------------------------------------------------
     // Create a label for tracking of region protected by the monitor in synchronized methods.
@@ -5285,11 +5341,15 @@ void CodeGen::genCallInstruction(GenTreePtr node)
     }
 
     // Is the caller supposed to pop the arguments?
-    if (((call->gtFlags & GTF_CALL_POP_ARGS) != 0) && (stackArgBytes != 0))
+    if (fCallerPop && (stackArgBytes != 0))
     {
-        genAdjustSP(stackArgBytes);
+        stackAdjustBias = stackArgBytes;
     }
+
+    SubtractStackLevel(stackArgBytes);
 #endif // _TARGET_X86_
+
+    genRemoveAlignmentAfterCall(call, stackAdjustBias);
 }
 
 // Produce code for a GT_JMP node.
@@ -7139,7 +7199,7 @@ int CodeGenInterface::genSPtoFPdelta()
 {
     int delta;
 
-#ifdef PLATFORM_UNIX
+#ifdef UNIX_AMD64_ABI
 
     // We require frame chaining on Unix to support native tool unwinding (such as
     // unwinding by the native debugger). We have a CLR-only extension to the
@@ -7147,7 +7207,7 @@ int CodeGenInterface::genSPtoFPdelta()
     // If Unix ever supports EnC, the RSP == RBP assumption will have to be reevaluated.
     delta = genTotalFrameSize();
 
-#else // !PLATFORM_UNIX
+#else // !UNIX_AMD64_ABI
 
     // As per Amd64 ABI, RBP offset from initial RSP can be between 0 and 240 if
     // RBP needs to be reported in unwind codes.  This case would arise for methods
@@ -7173,7 +7233,7 @@ int CodeGenInterface::genSPtoFPdelta()
         delta = genTotalFrameSize();
     }
 
-#endif // !PLATFORM_UNIX
+#endif // !UNIX_AMD64_ABI
 
     return delta;
 }
@@ -7422,16 +7482,10 @@ unsigned CodeGen::getBaseVarForPutArgStk(GenTreePtr treeNode)
 
     unsigned baseVarNum;
 
-#if FEATURE_FASTTAILCALL
-    bool putInIncomingArgArea = treeNode->AsPutArgStk()->putInIncomingArgArea;
-#else
-    const bool putInIncomingArgArea = false;
-#endif
-
     // Whether to setup stk arg in incoming or out-going arg area?
     // Fast tail calls implemented as epilog+jmp = stk arg is setup in incoming arg area.
     // All other calls - stk arg is setup in out-going arg area.
-    if (putInIncomingArgArea)
+    if (treeNode->AsPutArgStk()->putInIncomingArgArea())
     {
         // See the note in the function header re: finding the first stack passed argument.
         baseVarNum = getFirstArgWithStackSlot();
@@ -7468,7 +7522,96 @@ unsigned CodeGen::getBaseVarForPutArgStk(GenTreePtr treeNode)
     return baseVarNum;
 }
 
+//---------------------------------------------------------------------
+// genAlignStackBeforeCall: Align the stack if necessary before a call.
+//
+// Arguments:
+//    putArgStk - the putArgStk node.
+//
+void CodeGen::genAlignStackBeforeCall(GenTreePutArgStk* putArgStk)
+{
+#if defined(UNIX_X86_ABI)
+
+    genAlignStackBeforeCall(putArgStk->gtCall);
+
+#endif // UNIX_X86_ABI
+}
+
+//---------------------------------------------------------------------
+// genAlignStackBeforeCall: Align the stack if necessary before a call.
+//
+// Arguments:
+//    call - the call node.
+//
+void CodeGen::genAlignStackBeforeCall(GenTreeCall* call)
+{
+#if defined(UNIX_X86_ABI)
+
+    // Have we aligned the stack yet?
+    if (!call->fgArgInfo->IsStkAlignmentDone())
+    {
+        // We haven't done any stack alignment yet for this call.  We might need to create
+        // an alignment adjustment, even if this function itself doesn't have any stack args.
+        // This can happen if this function call is part of a nested call sequence, and the outer
+        // call has already pushed some arguments.
+
+        unsigned stkLevel = genStackLevel + call->fgArgInfo->GetStkSizeBytes();
+        call->fgArgInfo->ComputeStackAlignment(stkLevel);
+
+        unsigned padStkAlign = call->fgArgInfo->GetStkAlign();
+        if (padStkAlign != 0)
+        {
+            // Now generate the alignment
+            inst_RV_IV(INS_sub, REG_SPBASE, padStkAlign, EA_PTRSIZE);
+            AddStackLevel(padStkAlign);
+            AddNestedAlignment(padStkAlign);
+        }
+
+        call->fgArgInfo->SetStkAlignmentDone();
+    }
+
+#endif // UNIX_X86_ABI
+}
+
+//---------------------------------------------------------------------
+// genRemoveAlignmentAfterCall: After a call, remove the alignment
+// added before the call, if any.
+//
+// Arguments:
+//    call - the call node.
+//    bias - additional stack adjustment
+//
+// Note:
+//    When bias > 0, caller should adjust stack level appropriately as
+//    bias is not considered when adjusting stack level.
+//
+void CodeGen::genRemoveAlignmentAfterCall(GenTreeCall* call, unsigned bias)
+{
+#if defined(_TARGET_X86_)
+#if defined(UNIX_X86_ABI)
+    // Put back the stack pointer if there was any padding for stack alignment
+    unsigned padStkAlign  = call->fgArgInfo->GetStkAlign();
+    unsigned padStkAdjust = padStkAlign + bias;
+
+    if (padStkAdjust != 0)
+    {
+        inst_RV_IV(INS_add, REG_SPBASE, padStkAdjust, EA_PTRSIZE);
+        SubtractStackLevel(padStkAlign);
+        SubtractNestedAlignment(padStkAlign);
+    }
+#else  // UNIX_X86_ABI
+    if (bias != 0)
+    {
+        genAdjustSP(bias);
+    }
+#endif // !UNIX_X86_ABI_
+#else  // _TARGET_X86_
+    assert(bias == 0);
+#endif // !_TARGET_X86
+}
+
 #ifdef _TARGET_X86_
+
 //---------------------------------------------------------------------
 // genAdjustStackForPutArgStk:
 //    adjust the stack pointer for a putArgStk node if necessary.
@@ -7491,7 +7634,7 @@ bool CodeGen::genAdjustStackForPutArgStk(GenTreePutArgStk* putArgStk)
     {
         const unsigned argSize = genTypeSize(putArgStk);
         inst_RV_IV(INS_sub, REG_SPBASE, argSize, EA_PTRSIZE);
-        genStackLevel += argSize;
+        AddStackLevel(argSize);
         m_pushStkArg = false;
         return true;
     }
@@ -7535,7 +7678,7 @@ bool CodeGen::genAdjustStackForPutArgStk(GenTreePutArgStk* putArgStk)
     {
         m_pushStkArg = false;
         inst_RV_IV(INS_sub, REG_SPBASE, argSize, EA_PTRSIZE);
-        genStackLevel += argSize;
+        AddStackLevel(argSize);
         return true;
     }
 }
@@ -7623,7 +7766,7 @@ void CodeGen::genPutArgStkFieldList(GenTreePutArgStk* putArgStk)
             {
                 inst_IV(INS_push, 0);
                 currentOffset -= pushSize;
-                genStackLevel += pushSize;
+                AddStackLevel(pushSize);
                 adjustment -= pushSize;
             }
             m_pushStkArg = true;
@@ -7645,7 +7788,7 @@ void CodeGen::genPutArgStkFieldList(GenTreePutArgStk* putArgStk)
                 // Adjust the stack pointer to the next slot boundary.
                 inst_RV_IV(INS_sub, REG_SPBASE, adjustment, EA_PTRSIZE);
                 currentOffset -= adjustment;
-                genStackLevel += adjustment;
+                AddStackLevel(adjustment);
             }
 
             // Does it need to be in a byte register?
@@ -7698,7 +7841,7 @@ void CodeGen::genPutArgStkFieldList(GenTreePutArgStk* putArgStk)
                     }
                 }
                 currentOffset -= TARGET_POINTER_SIZE;
-                genStackLevel += TARGET_POINTER_SIZE;
+                AddStackLevel(TARGET_POINTER_SIZE);
             }
             else
             {
@@ -7720,14 +7863,14 @@ void CodeGen::genPutArgStkFieldList(GenTreePutArgStk* putArgStk)
         }
         else
         {
-#if defined(_TARGET_X86_) && defined(FEATURE_SIMD)
+#if defined(FEATURE_SIMD)
             if (fieldType == TYP_SIMD12)
             {
                 assert(genIsValidFloatReg(simdTmpReg));
                 genStoreSIMD12ToStack(argReg, simdTmpReg);
             }
             else
-#endif // defined(_TARGET_X86_) && defined(FEATURE_SIMD)
+#endif // defined(FEATURE_SIMD)
             {
                 genStoreRegToStackArg(fieldType, argReg, fieldOffset - currentOffset);
             }
@@ -7744,7 +7887,7 @@ void CodeGen::genPutArgStkFieldList(GenTreePutArgStk* putArgStk)
     {
         // We don't expect padding at the beginning of a struct, but it could happen with explicit layout.
         inst_RV_IV(INS_sub, REG_SPBASE, currentOffset, EA_PTRSIZE);
-        genStackLevel += currentOffset;
+        AddStackLevel(currentOffset);
     }
 }
 #endif // _TARGET_X86_
@@ -7765,15 +7908,7 @@ void CodeGen::genPutArgStk(GenTreePutArgStk* putArgStk)
 
 #ifdef _TARGET_X86_
 
-#if defined(UNIX_X86_ABI)
-    // For each call, first stack argument has the padding for alignment
-    // if this value is not zero, use it to adjust the ESP
-    unsigned argPadding = putArgStk->getArgPadding();
-    if (argPadding != 0)
-    {
-        inst_RV_IV(INS_sub, REG_SPBASE, argPadding * TARGET_POINTER_SIZE, EA_PTRSIZE);
-    }
-#endif
+    genAlignStackBeforeCall(putArgStk);
 
     if (varTypeIsStruct(targetType))
     {
@@ -7804,7 +7939,7 @@ void CodeGen::genPutArgStk(GenTreePutArgStk* putArgStk)
         {
             inst_IV(INS_push, data->gtIntCon.gtIconVal);
         }
-        genStackLevel += argSize;
+        AddStackLevel(argSize);
     }
     else if (data->OperGet() == GT_FIELD_LIST)
     {
@@ -7903,7 +8038,7 @@ void CodeGen::genPushReg(var_types type, regNumber srcReg)
         inst_RV_IV(INS_sub, REG_SPBASE, size, EA_PTRSIZE);
         getEmitter()->emitIns_AR_R(ins, attr, srcReg, REG_SPBASE, 0);
     }
-    genStackLevel += size;
+    AddStackLevel(size);
 }
 #endif // _TARGET_X86_
 
@@ -8101,7 +8236,7 @@ void CodeGen::genPutStructArgStk(GenTreePutArgStk* putArgStk)
             {
                 getEmitter()->emitIns_S(INS_push, slotAttr, srcLclNum, srcLclOffset + offset);
             }
-            genStackLevel += TARGET_POINTER_SIZE;
+            AddStackLevel(TARGET_POINTER_SIZE);
         }
 #else // !defined(_TARGET_X86_)
 
@@ -8361,12 +8496,14 @@ void CodeGen::genCreateAndStoreGCInfoX64(unsigned codeSize, unsigned prologSize 
     // Follow the code pattern of the x86 gc info encoder (genCreateAndStoreGCInfoJIT32).
     gcInfo.gcInfoBlockHdrSave(gcInfoEncoder, codeSize, prologSize);
 
+    // We keep the call count for the second call to gcMakeRegPtrTable() below.
+    unsigned callCnt = 0;
     // First we figure out the encoder ID's for the stack slots and registers.
-    gcInfo.gcMakeRegPtrTable(gcInfoEncoder, codeSize, prologSize, GCInfo::MAKE_REG_PTR_MODE_ASSIGN_SLOTS);
+    gcInfo.gcMakeRegPtrTable(gcInfoEncoder, codeSize, prologSize, GCInfo::MAKE_REG_PTR_MODE_ASSIGN_SLOTS, &callCnt);
     // Now we've requested all the slots we'll need; "finalize" these (make more compact data structures for them).
     gcInfoEncoder->FinalizeSlotIds();
     // Now we can actually use those slot ID's to declare live ranges.
-    gcInfo.gcMakeRegPtrTable(gcInfoEncoder, codeSize, prologSize, GCInfo::MAKE_REG_PTR_MODE_DO_WORK);
+    gcInfo.gcMakeRegPtrTable(gcInfoEncoder, codeSize, prologSize, GCInfo::MAKE_REG_PTR_MODE_DO_WORK, &callCnt);
 
     if (compiler->opts.compDbgEnC)
     {
@@ -8473,14 +8610,22 @@ void CodeGen::genEmitHelperCall(unsigned helper, int argSize, emitAttr retSize, 
         }
     }
 
-    getEmitter()->emitIns_Call(callType, compiler->eeFindHelper(helper), INDEBUG_LDISASM_COMMA(nullptr) addr, argSize,
-                               retSize FEATURE_UNIX_AMD64_STRUCT_PASSING_ONLY_ARG(EA_UNKNOWN), gcInfo.gcVarPtrSetCur,
-                               gcInfo.gcRegGCrefSetCur, gcInfo.gcRegByrefSetCur,
+    // clang-format off
+    getEmitter()->emitIns_Call(callType,
+                               compiler->eeFindHelper(helper),
+                               INDEBUG_LDISASM_COMMA(nullptr) addr,
+                               argSize,
+                               retSize
+                               MULTIREG_HAS_SECOND_GC_RET_ONLY_ARG(EA_UNKNOWN),
+                               gcInfo.gcVarPtrSetCur,
+                               gcInfo.gcRegGCrefSetCur,
+                               gcInfo.gcRegByrefSetCur,
                                BAD_IL_OFFSET, // IL offset
                                callTarget,    // ireg
                                REG_NA, 0, 0,  // xreg, xmul, disp
                                false,         // isJump
                                emitter::emitNoGChelper(helper));
+    // clang-format on
 
     regTracker.rsTrashRegSet(killMask);
     regTracker.rsTrashRegsForGCInterruptability();

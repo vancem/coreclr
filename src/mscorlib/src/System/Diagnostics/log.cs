@@ -14,6 +14,7 @@ namespace System.Diagnostics
     using System.Diagnostics.Contracts;
     using System.Diagnostics.CodeAnalysis;
 
+    using Console = Internal.Console;
 
     // LogSwitchLevelHandlers are triggered when the level of a LogSwitch is modified
     // NOTE: These are NOT triggered when the log switch setting is changed from the 
@@ -87,7 +88,7 @@ namespace System.Diagnostics
                 throw new ArgumentNullException("LogSwitch");
 
             if (level < 0)
-                throw new ArgumentOutOfRangeException(nameof(level), Environment.GetResourceString("ArgumentOutOfRange_NeedNonNegNum"));
+                throw new ArgumentOutOfRangeException(nameof(level), SR.ArgumentOutOfRange_NeedNonNegNum);
             Contract.EndContractBlock();
 
             // Is logging for this level for this switch enabled?

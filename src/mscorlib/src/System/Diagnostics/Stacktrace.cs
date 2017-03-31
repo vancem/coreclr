@@ -283,7 +283,7 @@ namespace System.Diagnostics
         {
             if (skipFrames < 0)
                 throw new ArgumentOutOfRangeException(nameof(skipFrames),
-                    Environment.GetResourceString("ArgumentOutOfRange_NeedNonNegNum"));
+                    SR.ArgumentOutOfRange_NeedNonNegNum);
             Contract.EndContractBlock();
 
             m_iNumOfFrames = 0;
@@ -299,7 +299,7 @@ namespace System.Diagnostics
         {
             if (skipFrames < 0)
                 throw new ArgumentOutOfRangeException(nameof(skipFrames),
-                    Environment.GetResourceString("ArgumentOutOfRange_NeedNonNegNum"));
+                    SR.ArgumentOutOfRange_NeedNonNegNum);
             Contract.EndContractBlock();
 
             m_iNumOfFrames = 0;
@@ -344,7 +344,7 @@ namespace System.Diagnostics
 
             if (skipFrames < 0)
                 throw new ArgumentOutOfRangeException(nameof(skipFrames),
-                    Environment.GetResourceString("ArgumentOutOfRange_NeedNonNegNum"));
+                    SR.ArgumentOutOfRange_NeedNonNegNum);
             Contract.EndContractBlock();
 
             m_iNumOfFrames = 0;
@@ -363,7 +363,7 @@ namespace System.Diagnostics
 
             if (skipFrames < 0)
                 throw new ArgumentOutOfRangeException(nameof(skipFrames),
-                    Environment.GetResourceString("ArgumentOutOfRange_NeedNonNegNum"));
+                    SR.ArgumentOutOfRange_NeedNonNegNum);
             Contract.EndContractBlock();
 
             m_iNumOfFrames = 0;
@@ -384,17 +384,6 @@ namespace System.Diagnostics
             m_iNumOfFrames = 1;
         }
 
-
-        // Constructs a stack trace for the given thread
-        //
-        [Obsolete("This constructor has been deprecated.  Please use a constructor that does not require a Thread parameter.  http://go.microsoft.com/fwlink/?linkid=14202")]
-        public StackTrace(Thread targetThread, bool needFileInfo)
-        {
-            m_iNumOfFrames = 0;
-            m_iMethodsToSkip = 0;
-
-            CaptureStackTrace(METHODS_TO_SKIP, needFileInfo, targetThread, null);
-        }
 
         [MethodImplAttribute(MethodImplOptions.InternalCall)]
         internal static extern void GetStackFramesInternal(StackFrameHelper sfh, int iSkip, bool fNeedFileInfo, Exception e);
@@ -550,8 +539,8 @@ namespace System.Diagnostics
 
             if (traceFormat != TraceFormat.NoResourceLookup)
             {
-                word_At = Environment.GetResourceString("Word_At");
-                inFileLineNum = Environment.GetResourceString("StackTrace_InFileLineNumber");
+                word_At = SR.Word_At;
+                inFileLineNum = SR.StackTrace_InFileLineNumber;
             }
 
             bool fFirstFrame = true;
@@ -669,7 +658,7 @@ namespace System.Diagnostics
                     if (sf.GetIsLastFrameFromForeignExceptionStackTrace())
                     {
                         sb.Append(Environment.NewLine);
-                        sb.Append(Environment.GetResourceString("Exception_EndStackTraceFromPreviousThrow"));
+                        sb.Append(SR.Exception_EndStackTraceFromPreviousThrow);
                     }
                 }
             }

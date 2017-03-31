@@ -45,6 +45,9 @@ else()
     elseif(CMAKE_SYSTEM_PROCESSOR STREQUAL armv7l)
         set(PAL_CMAKE_PLATFORM_ARCH_ARM 1)
         add_definitions(-D_ARM_)
+    elseif(CMAKE_SYSTEM_PROCESSOR STREQUAL arm)
+        set(PAL_CMAKE_PLATFORM_ARCH_ARM 1)
+        add_definitions(-D_ARM_)
     elseif(CMAKE_SYSTEM_PROCESSOR STREQUAL aarch64)
         set(PAL_CMAKE_PLATFORM_ARCH_ARM64 1)
         add_definitions(-D_ARM64_)
@@ -77,13 +80,17 @@ add_definitions(-D_FILE_OFFSET_BITS=64)
 if(PAL_CMAKE_PLATFORM_ARCH_AMD64)
   add_definitions(-DBIT64=1)
   add_definitions(-D_WIN64=1)
+  set(PAL_ARCH_SOURCES_DIR amd64)
 elseif(PAL_CMAKE_PLATFORM_ARCH_ARM)
   add_definitions(-DBIT32=1)
+  set(PAL_ARCH_SOURCES_DIR arm)
 elseif(PAL_CMAKE_PLATFORM_ARCH_ARM64)
   add_definitions(-DBIT64=1)
   add_definitions(-D_WIN64=1)
+  set(PAL_ARCH_SOURCES_DIR arm64)
 elseif(PAL_CMAKE_PLATFORM_ARCH_I386)
   add_definitions(-DBIT32=1)
+  set(PAL_ARCH_SOURCES_DIR i386)
 endif()
 
 if(CMAKE_SYSTEM_NAME STREQUAL Linux AND NOT CLR_CMAKE_PLATFORM_ALPINE_LINUX)
@@ -102,16 +109,16 @@ set(CMAKE_SHARED_LINKER_FLAGS_DEBUG "${CMAKE_SHARED_LINKER_FLAGS_DEBUG} -Wl,--no
 add_compile_options(-fPIC)
 
 set(ARCH_SOURCES
-  arch/${ARCH_SOURCES_DIR}/context2.S
-  arch/${ARCH_SOURCES_DIR}/debugbreak.S
-  arch/${ARCH_SOURCES_DIR}/exceptionhelper.S
-  arch/${ARCH_SOURCES_DIR}/processor.cpp
+  arch/${PAL_ARCH_SOURCES_DIR}/context2.S
+  arch/${PAL_ARCH_SOURCES_DIR}/debugbreak.S
+  arch/${PAL_ARCH_SOURCES_DIR}/exceptionhelper.S
+  arch/${PAL_ARCH_SOURCES_DIR}/processor.cpp
 )
 
 if(NOT CMAKE_SYSTEM_NAME STREQUAL Darwin)
   list(APPEND PLATFORM_SOURCES
-    arch/${ARCH_SOURCES_DIR}/callsignalhandlerwrapper.S
-    arch/${ARCH_SOURCES_DIR}/signalhandlerhelper.cpp
+    arch/${PAL_ARCH_SOURCES_DIR}/callsignalhandlerwrapper.S
+    arch/${PAL_ARCH_SOURCES_DIR}/signalhandlerhelper.cpp
   )
 endif(NOT CMAKE_SYSTEM_NAME STREQUAL Darwin)
 
@@ -161,6 +168,7 @@ set(SOURCES
   map/virtual.cpp
   memory/heap.cpp
   memory/local.cpp
+  misc/cgroup.cpp
   misc/dbgmsg.cpp
   misc/environ.cpp
   misc/error.cpp
@@ -287,21 +295,26 @@ if(CMAKE_SYSTEM_NAME STREQUAL Linux)
   endif()
 
   if(CLR_CMAKE_PLATFORM_ANDROID)
+    find_library(LZMA NAMES lzma)
+
+    if(LZMA STREQUAL LZMA-NOTFOUND)
+      message(FATAL_ERROR "Cannot find liblzma.")
+    endif(LZMA STREQUAL LZMA-NOTFOUND)
+
     target_link_libraries(coreclrpal
       gnustl_shared
       android-support
-      android-glob)
+      android-glob
+      ${LZMA})
   endif()
 
-  if(NOT CLR_CMAKE_PLATFORM_ANDROID)
-    find_library(UNWIND NAMES unwind)
+  find_library(UNWIND NAMES unwind)
 
-    if(UNWIND STREQUAL UNWIND-NOTFOUND)
-      message(FATAL_ERROR "Cannot find libunwind. Try installing libunwind8-dev and libunwind8.")
-    endif(UNWIND STREQUAL UNWIND-NOTFOUND)
+  if(UNWIND STREQUAL UNWIND-NOTFOUND)
+    message(FATAL_ERROR "Cannot find libunwind. Try installing libunwind8-dev and libunwind8.")
+  endif(UNWIND STREQUAL UNWIND-NOTFOUND)
 
-    target_link_libraries(coreclrpal ${UNWIND})
-  endif()
+  target_link_libraries(coreclrpal ${UNWIND})
 
   if(CLR_MAKE_PLATFORM_ANDROID)
     find_library(ANDROID_SUPPORT NAMES android-support)

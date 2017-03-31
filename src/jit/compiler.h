@@ -252,8 +252,10 @@ public:
     unsigned char lvStackByref : 1;  // This is a compiler temporary of TYP_BYREF that is known to point into our local
                                      // stack frame.
 
-    unsigned char lvArgWrite : 1; // variable is a parameter and STARG was used on it
-    unsigned char lvIsTemp : 1;   // Short-lifetime compiler temp
+    unsigned char lvHasILStoreOp : 1;         // there is at least one STLOC or STARG on this local
+    unsigned char lvHasMultipleILStoreOp : 1; // there is more than one STLOC on this local
+
+    unsigned char lvIsTemp : 1; // Short-lifetime compiler temp
 #if OPT_BOOL_OPS
     unsigned char lvIsBoolean : 1; // set if variable is boolean
 #endif
@@ -321,6 +323,12 @@ public:
     var_types     lvBaseType : 5;            // Note: this only packs because var_types is a typedef of unsigned char
 #endif                                       // FEATURE_SIMD
     unsigned char lvRegStruct : 1;           // This is a reg-sized non-field-addressed struct.
+
+    unsigned char lvClassIsExact : 1; // lvClassHandle is the exact type
+
+#ifdef DEBUG
+    unsigned char lvClassInfoUpdated : 1; // true if this var has updated class handle or exactness
+#endif
 
     union {
         unsigned lvFieldLclStart; // The index of the local var representing the first field in the promoted struct
@@ -703,6 +711,8 @@ public:
     unsigned lvSlotNum; // original slot # (if remapped)
 
     typeInfo lvVerTypeInfo; // type info needed for verification
+
+    CORINFO_CLASS_HANDLE lvClassHnd; // class handle for the local, or null if not known
 
     BYTE* lvGcLayout; // GC layout info for structs
 
@@ -1190,11 +1200,6 @@ struct fgArgTabEntry
     unsigned alignment;  // 1 or 2 (slots/registers)
     unsigned lateArgInx; // index into gtCallLateArgs list
     unsigned tmpNum;     // the LclVar number if we had to force evaluation of this arg
-#if defined(UNIX_X86_ABI)
-    unsigned padStkAlign; // Count of number of padding slots for stack alignment. For each Call, only the first
-                          // argument may have a value to emit "sub esp, n" to adjust the stack before pushing
-                          // the argument.
-#endif
 
     bool isSplit : 1;       // True when this argument is split between the registers and OutArg area
     bool needTmp : 1;       // True when we force this argument's evaluation into a temp LclVar
@@ -1267,14 +1272,19 @@ typedef struct fgArgTabEntry* fgArgTabEntryPtr;
 
 class fgArgInfo
 {
-    Compiler*  compiler;    // Back pointer to the compiler instance so that we can allocate memory
-    GenTreePtr callTree;    // Back pointer to the GT_CALL node for this fgArgInfo
-    unsigned   argCount;    // Updatable arg count value
-    unsigned   nextSlotNum; // Updatable slot count value
-    unsigned   stkLevel;    // Stack depth when we make this call (for x86)
+    Compiler*    compiler;    // Back pointer to the compiler instance so that we can allocate memory
+    GenTreeCall* callTree;    // Back pointer to the GT_CALL node for this fgArgInfo
+    unsigned     argCount;    // Updatable arg count value
+    unsigned     nextSlotNum; // Updatable slot count value
+    unsigned     stkLevel;    // Stack depth when we make this call (for x86)
+
 #if defined(UNIX_X86_ABI)
-    unsigned padStkAlign; // Count of number of padding slots for stack alignment. This value is used to turn back
-                          // stack pointer before it was adjusted after each Call
+    bool     alignmentDone; // Updateable flag, set to 'true' after we've done any required alignment.
+    unsigned stkSizeBytes;  // Size of stack used by this call, in bytes. Calculated during fgMorphArgs().
+    unsigned padStkAlign;   // Stack alignment in bytes required before arguments are pushed for this call.
+                            // Computed dynamically during codegen, based on stkSizeBytes and the current
+                            // stack level (genStackLevel) when the first stack adjustment is made for
+                            // this call.
 #endif
 
 #if FEATURE_FIXED_OUT_ARGS
@@ -1292,8 +1302,8 @@ private:
     void AddArg(fgArgTabEntryPtr curArgTabEntry);
 
 public:
-    fgArgInfo(Compiler* comp, GenTreePtr call, unsigned argCount);
-    fgArgInfo(GenTreePtr newCall, GenTreePtr oldCall);
+    fgArgInfo(Compiler* comp, GenTreeCall* call, unsigned argCount);
+    fgArgInfo(GenTreeCall* newCall, GenTreeCall* oldCall);
 
     fgArgTabEntryPtr AddRegArg(
         unsigned argNum, GenTreePtr node, GenTreePtr parent, regNumber regNum, unsigned numRegs, unsigned alignment);
@@ -1329,10 +1339,6 @@ public:
 
     void ArgsComplete();
 
-#if defined(UNIX_X86_ABI)
-    void ArgsAlignPadding();
-#endif
-
     void SortArgs();
 
     void EvalArgsToTemps();
@@ -1352,12 +1358,6 @@ public:
     {
         return nextSlotNum;
     }
-#if defined(UNIX_X86_ABI)
-    unsigned GetPadStackAlign()
-    {
-        return padStkAlign;
-    }
-#endif
     bool HasRegArgs()
     {
         return hasRegArgs;
@@ -1380,6 +1380,40 @@ public:
         outArgSize = newVal;
     }
 #endif // FEATURE_FIXED_OUT_ARGS
+
+    void ComputeStackAlignment(unsigned curStackLevelInBytes)
+    {
+#if defined(UNIX_X86_ABI)
+        padStkAlign = AlignmentPad(curStackLevelInBytes, STACK_ALIGN);
+#endif // defined(UNIX_X86_ABI)
+    }
+
+    void SetStkSizeBytes(unsigned newStkSizeBytes)
+    {
+#if defined(UNIX_X86_ABI)
+        stkSizeBytes = newStkSizeBytes;
+#endif // defined(UNIX_X86_ABI)
+    }
+
+#if defined(UNIX_X86_ABI)
+    unsigned GetStkAlign()
+    {
+        return padStkAlign;
+    }
+    unsigned GetStkSizeBytes() const
+    {
+        return stkSizeBytes;
+    }
+    bool IsStkAlignmentDone() const
+    {
+        return alignmentDone;
+    }
+    void SetStkAlignmentDone()
+    {
+        alignmentDone = true;
+    }
+#endif // defined(UNIX_X86_ABI)
+
     // Get the late arg for arg at position argIndex.  Caller must ensure this position has a late arg.
     GenTreePtr GetLateArg(unsigned argIndex);
 };
@@ -2038,9 +2072,9 @@ public:
     GenTreeArgList* gtNewArgList(GenTreePtr op1, GenTreePtr op2);
     GenTreeArgList* gtNewArgList(GenTreePtr op1, GenTreePtr op2, GenTreePtr op3);
 
-    static fgArgTabEntryPtr gtArgEntryByArgNum(GenTreePtr call, unsigned argNum);
-    static fgArgTabEntryPtr gtArgEntryByNode(GenTreePtr call, GenTreePtr node);
-    fgArgTabEntryPtr gtArgEntryByLateArgIndex(GenTreePtr call, unsigned lateArgInx);
+    static fgArgTabEntryPtr gtArgEntryByArgNum(GenTreeCall* call, unsigned argNum);
+    static fgArgTabEntryPtr gtArgEntryByNode(GenTreeCall* call, GenTreePtr node);
+    fgArgTabEntryPtr gtArgEntryByLateArgIndex(GenTreeCall* call, unsigned lateArgInx);
     bool gtArgIsThisPtr(fgArgTabEntryPtr argEntry);
 
     GenTreePtr gtNewAssignNode(GenTreePtr dst, GenTreePtr src);
@@ -2146,7 +2180,7 @@ public:
                               unsigned    flags      = GTF_SIDE_EFFECT,
                               bool        ignoreRoot = false);
 
-    GenTreePtr gtGetThisArg(GenTreePtr call);
+    GenTreePtr gtGetThisArg(GenTreeCall* call);
 
     // Static fields of struct types (and sometimes the types that those are reduced to) are represented by having the
     // static field contain an object pointer to the boxed struct.  This simplifies the GC implementation...but
@@ -2184,6 +2218,8 @@ public:
     CORINFO_CLASS_HANDLE gtGetStructHandleIfPresent(GenTreePtr tree);
     // Get the handle, and assert if not found.
     CORINFO_CLASS_HANDLE gtGetStructHandle(GenTreePtr tree);
+    // Get the handle for a ref type.
+    CORINFO_CLASS_HANDLE gtGetClassHandle(GenTreePtr tree, bool* isExact, bool* isNonNull);
 
 //-------------------------------------------------------------------------
 // Functions to display the trees
@@ -2222,16 +2258,16 @@ public:
     char* gtGetLclVarName(unsigned lclNum);
     void gtDispLclVar(unsigned varNum, bool padForBiggestDisp = true);
     void gtDispTreeList(GenTreePtr tree, IndentStack* indentStack = nullptr);
-    void gtGetArgMsg(GenTreePtr call, GenTreePtr arg, unsigned argNum, int listCount, char* bufp, unsigned bufLength);
-    void gtGetLateArgMsg(GenTreePtr call, GenTreePtr arg, int argNum, int listCount, char* bufp, unsigned bufLength);
-    void gtDispArgList(GenTreePtr tree, IndentStack* indentStack);
+    void gtGetArgMsg(GenTreeCall* call, GenTreePtr arg, unsigned argNum, int listCount, char* bufp, unsigned bufLength);
+    void gtGetLateArgMsg(GenTreeCall* call, GenTreePtr arg, int argNum, int listCount, char* bufp, unsigned bufLength);
+    void gtDispArgList(GenTreeCall* call, IndentStack* indentStack);
     void gtDispFieldSeq(FieldSeqNode* pfsn);
 
     void gtDispRange(LIR::ReadOnlyRange const& range);
 
     void gtDispTreeRange(LIR::Range& containingRange, GenTree* tree);
 
-    void gtDispLIRNode(GenTree* node);
+    void gtDispLIRNode(GenTree* node, const char* prefixMsg = nullptr);
 #endif
 
     // For tree walks
@@ -2642,10 +2678,15 @@ public:
     // Returns true if this local var is a multireg struct
     bool lvaIsMultiregStruct(LclVarDsc* varDsc);
 
-    // If the class is a TYP_STRUCT, get/set a class handle describing it
-
+    // If the local is a TYP_STRUCT, get/set a class handle describing it
     CORINFO_CLASS_HANDLE lvaGetStruct(unsigned varNum);
     void lvaSetStruct(unsigned varNum, CORINFO_CLASS_HANDLE typeHnd, bool unsafeValueClsCheck, bool setTypeInfo = true);
+
+    // If the local is TYP_REF, set or update the associated class information.
+    void lvaSetClass(unsigned varNum, CORINFO_CLASS_HANDLE clsHnd, bool isExact = false);
+    void lvaSetClass(unsigned varNum, GenTreePtr tree, CORINFO_CLASS_HANDLE stackHandle = nullptr);
+    void lvaUpdateClass(unsigned varNum, CORINFO_CLASS_HANDLE clsHnd, bool isExact = false);
+    void lvaUpdateClass(unsigned varNum, GenTreePtr tree, CORINFO_CLASS_HANDLE stackHandle = nullptr);
 
 #define MAX_NumOfFieldsInPromotableStruct 4 // Maximum number of fields in promotable struct
 
@@ -2854,8 +2895,8 @@ protected:
     bool impCanPInvokeInline();
     bool impCanPInvokeInlineCallSite(BasicBlock* block);
     void impCheckForPInvokeCall(
-        GenTreePtr call, CORINFO_METHOD_HANDLE methHnd, CORINFO_SIG_INFO* sig, unsigned mflags, BasicBlock* block);
-    GenTreePtr impImportIndirectCall(CORINFO_SIG_INFO* sig, IL_OFFSETX ilOffset = BAD_IL_OFFSET);
+        GenTreeCall* call, CORINFO_METHOD_HANDLE methHnd, CORINFO_SIG_INFO* sig, unsigned mflags, BasicBlock* block);
+    GenTreeCall* impImportIndirectCall(CORINFO_SIG_INFO* sig, IL_OFFSETX ilOffset = BAD_IL_OFFSET);
     void impPopArgsForUnmanagedCall(GenTreePtr call, CORINFO_SIG_INFO* sig);
 
     void impInsertHelperCall(CORINFO_HELPER_DESC* helperCall);
@@ -2875,9 +2916,14 @@ protected:
                             CORINFO_CALL_INFO* callInfo,
                             IL_OFFSET          rawILOffset);
 
+    void impDevirtualizeCall(GenTreeCall*            call,
+                             GenTreePtr              obj,
+                             CORINFO_CALL_INFO*      callInfo,
+                             CORINFO_CONTEXT_HANDLE* exactContextHnd);
+
     bool impMethodInfo_hasRetBuffArg(CORINFO_METHOD_INFO* methInfo);
 
-    GenTreePtr impFixupCallStructReturn(GenTreePtr call, CORINFO_CLASS_HANDLE retClsHnd);
+    GenTreePtr impFixupCallStructReturn(GenTreeCall* call, CORINFO_CLASS_HANDLE retClsHnd);
 
     GenTreePtr impFixupStructReturnType(GenTreePtr op, CORINFO_CLASS_HANDLE retClsHnd);
 
@@ -3014,11 +3060,11 @@ public:
 
     GenTreePtr impReadyToRunLookupToTree(CORINFO_CONST_LOOKUP* pLookup, unsigned flags, void* compileTimeHandle);
 
-    GenTreePtr impReadyToRunHelperToTree(CORINFO_RESOLVED_TOKEN* pResolvedToken,
-                                         CorInfoHelpFunc         helper,
-                                         var_types               type,
-                                         GenTreeArgList*         arg                = nullptr,
-                                         CORINFO_LOOKUP_KIND*    pGenericLookupKind = nullptr);
+    GenTreeCall* impReadyToRunHelperToTree(CORINFO_RESOLVED_TOKEN* pResolvedToken,
+                                           CorInfoHelpFunc         helper,
+                                           var_types               type,
+                                           GenTreeArgList*         arg                = nullptr,
+                                           CORINFO_LOOKUP_KIND*    pGenericLookupKind = nullptr);
 
     GenTreePtr impCastClassOrIsInstToTree(GenTreePtr              op1,
                                           GenTreePtr              op2,
@@ -3541,7 +3587,7 @@ public:
     bool                 fgSlopUsedInEdgeWeights;  // true if their was some slop used when computing the edge weights
     bool                 fgRangeUsedInEdgeWeights; // true if some of the edgeWeight are expressed in Min..Max form
     bool                 fgNeedsUpdateFlowGraph;   // true if we need to run fgUpdateFlowGraph
-    BasicBlock::weight_t fgCalledWeight;           // count of the number of times this method was called
+    BasicBlock::weight_t fgCalledCount;            // count of the number of times this method was called
                                                    // This is derived from the profile data
                                                    // or is BB_UNITY_WEIGHT when we don't have profile data
 
@@ -3657,9 +3703,9 @@ public:
 
     GenTreePtr fgInitThisClass();
 
-    GenTreePtr fgGetStaticsCCtorHelper(CORINFO_CLASS_HANDLE cls, CorInfoHelpFunc helper);
+    GenTreeCall* fgGetStaticsCCtorHelper(CORINFO_CLASS_HANDLE cls, CorInfoHelpFunc helper);
 
-    GenTreePtr fgGetSharedCCtor(CORINFO_CLASS_HANDLE cls);
+    GenTreeCall* fgGetSharedCCtor(CORINFO_CLASS_HANDLE cls);
 
     void fgLocalVarLiveness();
 
@@ -4517,12 +4563,22 @@ protected:
 
     bool fgHaveProfileData();
     bool fgGetProfileWeightForBasicBlock(IL_OFFSET offset, unsigned* weight);
+    void fgInstrumentMethod();
 
+public:
+    // fgIsUsingProfileWeights - returns true if we have real profile data for this method
+    //                           or if we have some fake profile data for the stress mode
     bool fgIsUsingProfileWeights()
     {
         return (fgHaveProfileData() || fgStressBBProf());
     }
-    void fgInstrumentMethod();
+
+    // fgProfileRunsCount - returns total number of scenario runs for the profile data
+    //                      or BB_UNITY_WEIGHT when we aren't using profile data.
+    unsigned fgProfileRunsCount()
+    {
+        return fgIsUsingProfileWeights() ? fgNumProfileRuns : BB_UNITY_WEIGHT;
+    }
 
 //-------- Insert a statement at the start or end of a basic block --------
 
@@ -4677,7 +4733,7 @@ private:
     void fgNoteNonInlineCandidate(GenTreeStmt* stmt, GenTreeCall* call);
     static fgWalkPreFn fgFindNonInlineCandidate;
 #endif
-    GenTreePtr fgOptimizeDelegateConstructor(GenTreePtr call, CORINFO_CONTEXT_HANDLE* ExactContextHnd);
+    GenTreePtr fgOptimizeDelegateConstructor(GenTreeCall* call, CORINFO_CONTEXT_HANDLE* ExactContextHnd);
     GenTreePtr fgMorphLeaf(GenTreePtr tree);
     void fgAssignSetVarDef(GenTreePtr tree);
     GenTreePtr fgMorphOneAsgBlockOp(GenTreePtr tree);
@@ -4819,7 +4875,7 @@ private:
 
     static fgWalkPreFn gtHasLocalsWithAddrOpCB;
     bool gtCanOptimizeTypeEquality(GenTreePtr tree);
-    bool gtIsTypeHandleToRuntimeTypeHelper(GenTreePtr tree);
+    bool gtIsTypeHandleToRuntimeTypeHelper(GenTreeCall* call);
     bool gtIsActiveCSE_Candidate(GenTreePtr tree);
 
 #ifdef DEBUG
@@ -5373,7 +5429,6 @@ protected:
     // Keeps tracked cse indices
     BitVecTraits* cseTraits;
     EXPSET_TP     cseFull;
-    EXPSET_TP     cseEmpty;
 
     /* Generic list of nodes - used by the CSE logic */
 
@@ -5542,7 +5597,7 @@ protected:
         callInterf   ivaMaskCall;       // What kind of calls are there?
     };
 
-    static callInterf optCallInterf(GenTreePtr call);
+    static callInterf optCallInterf(GenTreeCall* call);
 
 public:
     // VN based copy propagation.
@@ -5646,7 +5701,6 @@ public:
     // Data structures for assertion prop
     BitVecTraits* apTraits;
     ASSERT_TP     apFull;
-    ASSERT_TP     apEmpty;
 
     enum optAssertionKind
     {
@@ -5817,8 +5871,20 @@ public:
 
         bool HasSameOp1(AssertionDsc* that, bool vnBased)
         {
-            return (op1.kind == that->op1.kind) &&
-                   ((vnBased && (op1.vn == that->op1.vn)) || (!vnBased && (op1.lcl.lclNum == that->op1.lcl.lclNum)));
+            if (op1.kind != that->op1.kind)
+            {
+                return false;
+            }
+            else if (op1.kind == O1K_ARR_BND)
+            {
+                assert(vnBased);
+                return (op1.bnd.vnIdx == that->op1.bnd.vnIdx) && (op1.bnd.vnLen == that->op1.bnd.vnLen);
+            }
+            else
+            {
+                return ((vnBased && (op1.vn == that->op1.vn)) ||
+                        (!vnBased && (op1.lcl.lclNum == that->op1.lcl.lclNum)));
+            }
         }
 
         bool HasSameOp2(AssertionDsc* that, bool vnBased)
@@ -5867,11 +5933,21 @@ public:
 
         bool Equals(AssertionDsc* that, bool vnBased)
         {
-            return (assertionKind == that->assertionKind) && HasSameOp1(that, vnBased) && HasSameOp2(that, vnBased);
+            if (assertionKind != that->assertionKind)
+            {
+                return false;
+            }
+            else if (assertionKind == OAK_NO_THROW)
+            {
+                assert(op2.kind == O2K_INVALID);
+                return HasSameOp1(that, vnBased);
+            }
+            else
+            {
+                return HasSameOp1(that, vnBased) && HasSameOp2(that, vnBased);
+            }
         }
     };
-
-    typedef unsigned short AssertionIndex;
 
 protected:
     static fgWalkPreFn optAddCopiesCallback;
@@ -5909,8 +5985,6 @@ public:
                           ValueNumToAssertsMap;
     ValueNumToAssertsMap* optValueNumToAsserts;
 
-    static const AssertionIndex NO_ASSERTION_INDEX = 0;
-
     // Assertion prop helpers.
     ASSERT_TP& GetAssertionDep(unsigned lclNum);
     AssertionDsc* optGetAssertion(AssertionIndex assertIndex);
@@ -5931,8 +6005,8 @@ public:
     // Assertion Gen functions.
     void optAssertionGen(GenTreePtr tree);
     AssertionIndex optAssertionGenPhiDefn(GenTreePtr tree);
-    AssertionIndex optCreateJTrueBoundsAssertion(GenTreePtr tree);
-    AssertionIndex optAssertionGenJtrue(GenTreePtr tree);
+    AssertionInfo optCreateJTrueBoundsAssertion(GenTreePtr tree);
+    AssertionInfo optAssertionGenJtrue(GenTreePtr tree);
     AssertionIndex optCreateJtrueAssertions(GenTreePtr op1, GenTreePtr op2, Compiler::optAssertionKind assertionKind);
     AssertionIndex optFindComplementary(AssertionIndex assertionIndex);
     void optMapComplementary(AssertionIndex assertionIndex, AssertionIndex index);
@@ -5980,23 +6054,20 @@ public:
     GenTreePtr optAssertionProp_LclVar(ASSERT_VALARG_TP assertions, const GenTreePtr tree, const GenTreePtr stmt);
     GenTreePtr optAssertionProp_Ind(ASSERT_VALARG_TP assertions, const GenTreePtr tree, const GenTreePtr stmt);
     GenTreePtr optAssertionProp_Cast(ASSERT_VALARG_TP assertions, const GenTreePtr tree, const GenTreePtr stmt);
-    GenTreePtr optAssertionProp_Call(ASSERT_VALARG_TP assertions, const GenTreePtr tree, const GenTreePtr stmt);
+    GenTreePtr optAssertionProp_Call(ASSERT_VALARG_TP assertions, GenTreeCall* call, const GenTreePtr stmt);
     GenTreePtr optAssertionProp_RelOp(ASSERT_VALARG_TP assertions, const GenTreePtr tree, const GenTreePtr stmt);
     GenTreePtr optAssertionProp_Comma(ASSERT_VALARG_TP assertions, const GenTreePtr tree, const GenTreePtr stmt);
     GenTreePtr optAssertionProp_BndsChk(ASSERT_VALARG_TP assertions, const GenTreePtr tree, const GenTreePtr stmt);
     GenTreePtr optAssertionPropGlobal_RelOp(ASSERT_VALARG_TP assertions, const GenTreePtr tree, const GenTreePtr stmt);
     GenTreePtr optAssertionPropLocal_RelOp(ASSERT_VALARG_TP assertions, const GenTreePtr tree, const GenTreePtr stmt);
     GenTreePtr optAssertionProp_Update(const GenTreePtr newTree, const GenTreePtr tree, const GenTreePtr stmt);
-    GenTreePtr optNonNullAssertionProp_Call(ASSERT_VALARG_TP assertions, const GenTreePtr tree, const GenTreePtr stmt);
+    GenTreePtr optNonNullAssertionProp_Call(ASSERT_VALARG_TP assertions, GenTreeCall* call, const GenTreePtr stmt);
 
     // Implied assertion functions.
     void optImpliedAssertions(AssertionIndex assertionIndex, ASSERT_TP& activeAssertions);
     void optImpliedByTypeOfAssertions(ASSERT_TP& activeAssertions);
     void optImpliedByCopyAssertion(AssertionDsc* copyAssertion, AssertionDsc* depAssertion, ASSERT_TP& result);
     void optImpliedByConstAssertion(AssertionDsc* curAssertion, ASSERT_TP& result);
-
-    ASSERT_VALRET_TP optNewFullAssertSet();
-    ASSERT_VALRET_TP optNewEmptyAssertSet();
 
 #ifdef DEBUG
     void optPrintAssertion(AssertionDsc* newAssertion, AssertionIndex assertionIndex = 0);
@@ -6513,11 +6584,7 @@ public:
     // Returns the page size for the target machine as reported by the EE.
     inline size_t eeGetPageSize()
     {
-#if COR_JIT_EE_VERSION > 460
         return eeGetEEInfo()->osPageSize;
-#else  // COR_JIT_EE_VERSION <= 460
-        return CORINFO_PAGE_SIZE;
-#endif // COR_JIT_EE_VERSION > 460
     }
 
     // Returns the frame size at which we will generate a loop to probe the stack.
@@ -6535,11 +6602,7 @@ public:
 
     inline bool IsTargetAbi(CORINFO_RUNTIME_ABI abi)
     {
-#if COR_JIT_EE_VERSION > 460
         return eeGetEEInfo()->targetAbi == abi;
-#else
-        return CORINFO_DESKTOP_ABI == abi;
-#endif
     }
 
     inline bool generateCFIUnwindCodes()
@@ -7734,28 +7797,20 @@ public:
         // PInvoke transitions inline (e.g. when targeting CoreRT).
         inline bool ShouldUsePInvokeHelpers()
         {
-#if COR_JIT_EE_VERSION > 460
             return jitFlags->IsSet(JitFlags::JIT_FLAG_USE_PINVOKE_HELPERS);
-#else
-            return false;
-#endif
         }
 
         // true if we should use insert the REVERSE_PINVOKE_{ENTER,EXIT} helpers in the method
         // prolog/epilog
         inline bool IsReversePInvoke()
         {
-#if COR_JIT_EE_VERSION > 460
             return jitFlags->IsSet(JitFlags::JIT_FLAG_REVERSE_PINVOKE);
-#else
-            return false;
-#endif
         }
 
         // true if we must generate code compatible with JIT32 quirks
         inline bool IsJit32Compat()
         {
-#if defined(_TARGET_X86_) && COR_JIT_EE_VERSION > 460
+#if defined(_TARGET_X86_)
             return jitFlags->IsSet(JitFlags::JIT_FLAG_DESKTOP_QUIRKS);
 #else
             return false;
@@ -7765,9 +7820,9 @@ public:
         // true if we must generate code compatible with Jit64 quirks
         inline bool IsJit64Compat()
         {
-#if defined(_TARGET_AMD64_) && COR_JIT_EE_VERSION > 460
+#if defined(_TARGET_AMD64_)
             return jitFlags->IsSet(JitFlags::JIT_FLAG_DESKTOP_QUIRKS);
-#elif defined(_TARGET_AMD64_) && !defined(FEATURE_CORECLR)
+#elif !defined(FEATURE_CORECLR)
             return true;
 #else
             return false;

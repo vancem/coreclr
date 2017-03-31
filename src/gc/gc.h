@@ -31,6 +31,11 @@ Module Name:
 
 #ifdef FEATURE_STANDALONE_GC
 #include "gcenv.ee.standalone.inl"
+
+// GCStress does not currently work with Standalone GC
+#ifdef STRESS_HEAP
+ #undef STRESS_HEAP
+#endif // STRESS_HEAP
 #endif // FEATURE_STANDALONE_GC
 
 /*
@@ -98,12 +103,15 @@ class DacHeapWalker;
 
 #define MP_LOCKS
 
+#ifdef FEATURE_MANUALLY_MANAGED_CARD_BUNDLES
+extern "C" uint32_t* g_gc_card_bundle_table;
+#endif
+
 extern "C" uint32_t* g_gc_card_table;
 extern "C" uint8_t* g_gc_lowest_address;
 extern "C" uint8_t* g_gc_highest_address;
-extern "C" bool g_fFinalizerRunOnShutDown;
-extern "C" bool g_built_with_svr_gc;
-extern "C" uint8_t g_build_variant;
+
+::IGCHandleTable*  CreateGCHandleTable();
 
 namespace WKS {
     ::IGCHeapInternal* CreateGCHeap();
@@ -214,13 +222,13 @@ public:
         return IGCHeap::maxGeneration;
     }
 
-    BOOL IsValidSegmentSize(size_t cbSize)
+    bool IsValidSegmentSize(size_t cbSize)
     {
         //Must be aligned on a Mb and greater than 4Mb
         return (((cbSize & (1024*1024-1)) ==0) && (cbSize >> 22));
     }
 
-    BOOL IsValidGen0MaxSize(size_t cbSize)
+    bool IsValidGen0MaxSize(size_t cbSize)
     {
         return (cbSize >= 64*1024);
     }
@@ -230,11 +238,6 @@ public:
         WRAPPER_NO_CONTRACT;
 
         return mt->GetBaseSize() >= LARGE_OBJECT_SIZE;
-    }
-
-    void SetFinalizeRunOnShutdown(bool value)
-    {
-        g_fFinalizerRunOnShutDown = value;
     }
 
 protected: 
@@ -261,8 +264,11 @@ extern void FinalizeWeakReference(Object * obj);
 // The single GC heap instance, shared with the VM.
 extern IGCHeapInternal* g_theGCHeap;
 
+// The single GC handle table instance, shared with the VM.
+extern IGCHandleTable* g_theGCHandleTable;
+
 #ifndef DACCESS_COMPILE
-inline BOOL IsGCInProgress(bool bConsiderGCStart = FALSE)
+inline bool IsGCInProgress(bool bConsiderGCStart = false)
 {
     WRAPPER_NO_CONTRACT;
 
@@ -270,7 +276,7 @@ inline BOOL IsGCInProgress(bool bConsiderGCStart = FALSE)
 }
 #endif // DACCESS_COMPILE
 
-inline BOOL IsServerHeap()
+inline bool IsServerHeap()
 {
     LIMITED_METHOD_CONTRACT;
 #ifdef FEATURE_SVR_GC

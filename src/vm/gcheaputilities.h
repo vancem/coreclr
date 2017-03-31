@@ -20,6 +20,14 @@ GPTR_DECL(uint32_t,g_card_table);
 }
 #endif // !DACCESS_COMPILE
 
+// For single-proc machines, the EE will use a single, shared alloc context
+// for all allocations. In order to avoid extra indirections in assembly
+// allocation helpers, the EE owns the global allocation context and the
+// GC will update it when it needs to.
+extern "C" gc_alloc_context g_global_alloc_context;
+
+extern "C" IGCHandleTable* g_pGCHandleTable;
+extern "C" uint32_t* g_card_bundle_table;
 extern "C" uint8_t* g_ephemeral_low;
 extern "C" uint8_t* g_ephemeral_high;
 
@@ -64,6 +72,15 @@ public:
         return g_pGCHeap;
     }
 
+    // Retrieves the GC handle table.
+    static IGCHandleTable* GetGCHandleTable() 
+    {
+        LIMITED_METHOD_CONTRACT;
+
+        assert(g_pGCHandleTable != nullptr);
+        return g_pGCHandleTable;
+    }
+
     // Returns true if the heap has been initialized, false otherwise.
     inline static bool IsGCHeapInitialized()
     {
@@ -74,7 +91,7 @@ public:
 
     // Returns true if a the heap is initialized and a garbage collection
     // is in progress, false otherwise.
-    inline static BOOL IsGCInProgress(BOOL bConsiderGCStart = FALSE)
+    inline static bool IsGCInProgress(bool bConsiderGCStart = false)
     {
         WRAPPER_NO_CONTRACT;
 
@@ -83,7 +100,7 @@ public:
 
     // Returns true if we should be competing marking for statics. This
     // influences the behavior of `GCToEEInterface::GcScanRoots`.
-    inline static BOOL MarkShouldCompeteForStatics()
+    inline static bool MarkShouldCompeteForStatics()
     {
         WRAPPER_NO_CONTRACT;
 
@@ -91,28 +108,12 @@ public:
     }
 
     // Waits until a GC is complete, if the heap has been initialized.
-    inline static void WaitForGCCompletion(BOOL bConsiderGCStart = FALSE)
+    inline static void WaitForGCCompletion(bool bConsiderGCStart = false)
     {
         WRAPPER_NO_CONTRACT;
 
         if (IsGCHeapInitialized())
             GetGCHeap()->WaitUntilGCComplete(bConsiderGCStart);
-    }
-
-    // Returns true if we should be using allocation contexts, false otherwise.
-    inline static bool UseAllocationContexts()
-    {
-        WRAPPER_NO_CONTRACT;
-#ifdef FEATURE_REDHAWK
-        // SIMPLIFY:  only use allocation contexts
-        return true;
-#else
-#if defined(_TARGET_ARM_) || defined(FEATURE_PAL)
-        return true;
-#else
-        return ((IsServerHeap() ? true : (g_SystemInfo.dwNumberOfProcessors >= 2)));
-#endif 
-#endif 
     }
 
     // Returns true if the held GC heap is a Server GC heap, false otherwise.
@@ -125,6 +126,18 @@ public:
 #else // FEATURE_SVR_GC
         return false;
 #endif // FEATURE_SVR_GC
+    }
+
+    static bool UseThreadAllocationContexts()
+    {
+        // When running on a single-proc system, it's more efficient to use a single global
+        // allocation context for SOH allocations than to use one for every thread.
+#if defined(_TARGET_ARM_) || defined(FEATURE_PAL) || defined(FEATURE_REDHAWK)
+        return true;
+#else
+        return IsServerHeap() || ::GetCurrentProcessCpuCount() != 1;
+#endif
+
     }
 
 #ifdef FEATURE_USE_SOFTWARE_WRITE_WATCH_FOR_GC_HEAP
@@ -190,7 +203,6 @@ public:
         memset(&g_sw_ww_table[base_index], ~0, end_index - base_index + 1);
     }
 #endif // FEATURE_USE_SOFTWARE_WRITE_WATCH_FOR_GC_HEAP
-
 
 private:
     // This class should never be instantiated.

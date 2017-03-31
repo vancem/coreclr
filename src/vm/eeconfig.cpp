@@ -402,6 +402,10 @@ HRESULT EEConfig::Init()
 #if defined(_DEBUG)
     bDiagnosticSuspend = false;
 #endif
+
+#if defined(FEATURE_TIERED_COMPILATION)
+    fTieredCompilation = false;
+#endif
     
     // After initialization, register the code:#GetConfigValueCallback method with code:CLRConfig to let
     // CLRConfig access config files. This is needed because CLRConfig lives outside the VM and can't
@@ -939,10 +943,6 @@ HRESULT EEConfig::sync()
 
     fStressLog        =  GetConfigDWORD_DontUse_(CLRConfig::UNSUPPORTED_StressLog, fStressLog) != 0;
     fForceEnc         =  GetConfigDWORD_DontUse_(CLRConfig::UNSUPPORTED_ForceEnc, fForceEnc) != 0;
-    
-#ifdef STRESS_THREAD
-    dwStressThreadCount =  GetConfigDWORD_DontUse_(CLRConfig::EXTERNAL_StressThreadCount, dwStressThreadCount);
-#endif
 
     iRequireZaps        = RequireZapsType(GetConfigDWORD_DontUse_(CLRConfig::EXTERNAL_ZapRequire, iRequireZaps));
     if (IsCompilationProcess() || iRequireZaps >= REQUIRE_ZAPS_COUNT)
@@ -1281,8 +1281,8 @@ HRESULT EEConfig::sync()
 
     dwSleepOnExit = CLRConfig::GetConfigValue(CLRConfig::UNSUPPORTED_SleepOnExit);
 
-#ifdef FEATURE_APPX
-    dwWindows8ProfileAPICheckFlag = CLRConfig::GetConfigValue(CLRConfig::INTERNAL_Windows8ProfileAPICheckFlag);
+#if defined(FEATURE_TIERED_COMPILATION)
+    fTieredCompilation = CLRConfig::GetConfigValue(CLRConfig::UNSUPPORTED_TieredCompilation) != 0;
 #endif
 
     return hr;

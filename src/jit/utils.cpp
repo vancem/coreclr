@@ -25,13 +25,13 @@ XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
 // same code for all platforms, hence it is here instead of in the targetXXX.cpp
 // files.
 
-#ifdef PLATFORM_UNIX
+#ifdef _TARGET_UNIX_
 // Should we distinguish Mac? Can we?
 // Should we distinguish flavors of Unix? Can we?
 const char* Target::g_tgtPlatformName = "Unix";
-#else  // !PLATFORM_UNIX
+#else  // !_TARGET_UNIX_
 const char* Target::g_tgtPlatformName = "Windows";
-#endif // !PLATFORM_UNIX
+#endif // !_TARGET_UNIX_
 
 /*****************************************************************************/
 
@@ -698,18 +698,24 @@ const char* refCntWtd2str(unsigned refCntWtd)
 
     nump = (nump == num1) ? num2 : num1;
 
-    unsigned valueInt  = refCntWtd / BB_UNITY_WEIGHT;
-    unsigned valueFrac = refCntWtd % BB_UNITY_WEIGHT;
-
-    if (valueFrac == 0)
+    if (refCntWtd == BB_MAX_WEIGHT)
     {
-        sprintf_s(temp, bufSize, "%2u  ", valueInt);
+        sprintf_s(temp, bufSize, "MAX   ");
     }
     else
     {
-        sprintf_s(temp, bufSize, "%2u.%1u", valueInt, (valueFrac * 10 / BB_UNITY_WEIGHT));
-    }
+        unsigned valueInt  = refCntWtd / BB_UNITY_WEIGHT;
+        unsigned valueFrac = refCntWtd % BB_UNITY_WEIGHT;
 
+        if (valueFrac == 0)
+        {
+            sprintf_s(temp, bufSize, "%u   ", valueInt);
+        }
+        else
+        {
+            sprintf_s(temp, bufSize, "%u.%02u", valueInt, (valueFrac * 100 / BB_UNITY_WEIGHT));
+        }
+    }
     return temp;
 }
 
@@ -780,7 +786,7 @@ void ConfigMethodRange::InitRanges(const wchar_t* rangeStr, unsigned capacity)
     }
 
     // Allocate some persistent memory
-    ICorJitHost* jitHost = JitHost::getJitHost();
+    ICorJitHost* jitHost = g_jitHost;
     m_ranges             = (Range*)jitHost->allocateMemory(capacity * sizeof(Range));
     m_entries            = capacity;
 
@@ -1412,9 +1418,7 @@ void HelperCallProperties::init()
             case CORINFO_HELP_GETGENERICS_GCSTATIC_BASE:
             case CORINFO_HELP_GETGENERICS_NONGCSTATIC_BASE:
             case CORINFO_HELP_READYTORUN_STATIC_BASE:
-#if COR_JIT_EE_VERSION > 460
             case CORINFO_HELP_READYTORUN_GENERIC_STATIC_BASE:
-#endif // COR_JIT_EE_VERSION > 460
 
                 // These may invoke static class constructors
                 // These can throw InvalidProgram exception if the class can not be constructed
@@ -1464,9 +1468,7 @@ void HelperCallProperties::init()
             case CORINFO_HELP_VERIFICATION:
             case CORINFO_HELP_RNGCHKFAIL:
             case CORINFO_HELP_THROWDIVZERO:
-#if COR_JIT_EE_VERSION > 460
             case CORINFO_HELP_THROWNULLREF:
-#endif // COR_JIT_EE_VERSION
             case CORINFO_HELP_THROW:
             case CORINFO_HELP_RETHROW:
 
