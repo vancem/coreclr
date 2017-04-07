@@ -229,6 +229,8 @@
 #include "perfmap.h"
 #endif
 
+#include "eventpipe.h"
+
 #ifndef FEATURE_PAL
 // Included for referencing __security_cookie
 #include "process.h"
@@ -483,6 +485,7 @@ void InitializeStartupFlags()
 
 
     InitializeHeapType((flags & STARTUP_SERVER_GC) != 0);
+    g_heap_type = (flags & STARTUP_SERVER_GC) == 0 ? GC_HEAP_WKS : GC_HEAP_SVR;
 
 #ifdef FEATURE_LOADER_OPTIMIZATION            
     g_dwGlobalSharePolicy = (flags&STARTUP_LOADER_OPTIMIZATION_MASK)>>1;
@@ -866,7 +869,7 @@ void EEStartupHelper(COINITIEE fFlags)
 
         // Initialize remoting
 
-        if (!GCHeapUtilities::GetGCHandleTable()->Initialize())
+        if (!GCHandleTableUtilities::GetGCHandleTable()->Initialize())
         {
             IfFailGo(E_OUTOFMEMORY);
         }
@@ -1031,7 +1034,12 @@ void EEStartupHelper(COINITIEE fFlags)
              SystemDomain::System()->DefaultDomain()));
         SystemDomain::System()->PublishAppDomainAndInformDebugger(SystemDomain::System()->DefaultDomain());
 #endif
- 
+
+#ifdef FEATURE_PERFTRACING
+        // Initialize the event pipe and start it if requested.
+        EventPipe::Initialize();
+        EventPipe::EnableOnStartup();
+#endif // FEATURE_PERFTRACING
 
 #endif // CROSSGEN_COMPILE
 
@@ -1700,6 +1708,11 @@ void STDMETHODCALLTYPE EEShutDownHelper(BOOL fIsDllUnloading)
         PerfMap::Destroy();
 #endif
 
+#ifdef FEATURE_PERFTRACING
+        // Shutdown the event pipe.
+        EventPipe::Shutdown();
+#endif // FEATURE_PERFTRACING
+
 #ifdef FEATURE_PREJIT
         {
             // If we're doing basic block profiling, we need to write the log files to disk.
@@ -1708,8 +1721,19 @@ void STDMETHODCALLTYPE EEShutDownHelper(BOOL fIsDllUnloading)
             if (!fIBCLoggingDone)
             {
                 if (g_IBCLogger.InstrEnabled())
-                    Module::WriteAllModuleProfileData(true);
+                {
+                    Thread * pThread = GetThread();
+                    ThreadLocalIBCInfo* pInfo = pThread->GetIBCInfo();
 
+                    // Acquire the Crst lock before creating the IBCLoggingDisabler object.
+                    // Only one thread at a time can be processing an IBC logging event.
+                    CrstHolder lock(g_IBCLogger.GetSync());
+                    {
+                        IBCLoggingDisabler disableLogging( pInfo );  // runs IBCLoggingDisabler::DisableLogging
+                        
+                        Module::WriteAllModuleProfileData(true);
+                    }
+                }
                 fIBCLoggingDone = TRUE;
             }
         }
@@ -1856,7 +1880,7 @@ part2:
 #ifdef SHOULD_WE_CLEANUP
                 if (!g_fFastExitProcess)
                 {
-                    GCHeapUtilities::GetGCHandleTable()->Shutdown();
+                    GCHandleTableUtilities::GetGCHandleTable()->Shutdown();
                 }
 #endif /* SHOULD_WE_CLEANUP */
 
@@ -3396,24 +3420,4 @@ void ContractRegressionCheck()
 
 #endif // ENABLE_CONTRACTS_IMPL
 
-
 #endif // CROSSGEN_COMPILE
-
-
-//
-// GetOSVersion - Gets the real OS version bypassing the OS compatibility shim
-// Mscoree.dll resides in System32 dir and is always excluded from compat shim.
-// This function calls mscoree!shim function via mscoreei ICLRRuntimeHostInternal interface
-// to get the OS version. We do not do this PAL or coreclr..we direclty call the OS
-// in that case.
-//
-BOOL GetOSVersion(LPOSVERSIONINFO lposVer)
-{
-// Fix for warnings when building against WinBlue build 9444.0.130614-1739
-// warning C4996: 'GetVersionExW': was declared deprecated
-// externalapis\windows\winblue\sdk\inc\sysinfoapi.h(442)
-// Deprecated. Use VerifyVersionInfo* or IsWindows* macros from VersionHelpers.
-#pragma warning( disable : 4996 )
-    return WszGetVersionEx(lposVer);
-#pragma warning( default : 4996 )
-}

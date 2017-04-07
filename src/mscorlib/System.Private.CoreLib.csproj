@@ -86,11 +86,9 @@
   <PropertyGroup Condition="'$(OsEnvironment)' == 'Unix'">
     <DebugType>portable</DebugType>
   </PropertyGroup>
-
   <PropertyGroup Condition="'$(TargetsOSX)' == 'true'">
     <DefineConstants>PLATFORM_OSX;$(DefineConstants)</DefineConstants>
   </PropertyGroup>
-
   <!-- Assembly attributes -->
   <PropertyGroup>
     <AssemblyName>System.Private.CoreLib</AssemblyName>
@@ -310,8 +308,7 @@
     <Compile Include="$(BclSourcesRoot)\System\AppContext\AppContextDefaultValues.CoreClrOverrides.cs" />
     <Compile Include="$(BclSourcesRoot)\System\AppContext\AppContextDefaultValues.Defaults.cs" />
     <Compile Include="$(BclSourcesRoot)\System\AppContext\AppContextDefaultValues.Defaults.Central.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\CurrentTimeZone.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\TimeZone.cs" />
+    <Compile Include="$(BclSourcesRoot)\System\CurrentSystemTimeZone.Cache.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Object.cs" />
     <Compile Include="$(BclSourcesRoot)\System\ICloneable.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Array.cs" />
@@ -348,7 +345,6 @@
     <Compile Include="$(BclSourcesRoot)\System\Boolean.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Buffer.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Byte.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\TypeUnloadedException.cs" />
     <Compile Include="$(BclSourcesRoot)\System\CompatibilitySwitches.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Currency.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Decimal.cs" />
@@ -508,54 +504,25 @@
   <ItemGroup>
     <Compile Include="$(BclSourcesRoot)\System\Globalization\BidiCategory.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Globalization\Calendar.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Globalization\CalendarAlgorithmType.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Globalization\CalendarData.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Globalization\CalendarWeekRule.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Globalization\CalendricalCalculationsHelper.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Globalization\CharUnicodeInfo.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Globalization\CharUnicodeInfoData.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Globalization\ChineseLunisolarCalendar.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Globalization\CompareInfo.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Globalization\CompareInfo.Invariant.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Globalization\CultureData.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Globalization\CultureInfo.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Globalization\CultureNotFoundException.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Globalization\CultureTypes.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Globalization\DaylightTime.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Globalization\DateTimeStyles.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Globalization\DigitShapes.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Globalization\EastAsianLunisolarCalendar.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Globalization\GlobalizationMode.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Globalization\GregorianCalendar.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Globalization\GregorianCalendarHelper.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Globalization\GregorianCalendarTypes.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Globalization\HebrewCalendar.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Globalization\HebrewNumber.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Globalization\HijriCalendar.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Globalization\IdnMapping.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Globalization\InternalGlobalizationHelper.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Globalization\JapaneseCalendar.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Globalization\JapaneseLunisolarCalendar.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Globalization\JulianCalendar.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Globalization\KoreanCalendar.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Globalization\KoreanLunisolarCalendar.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Globalization\NumberFormatInfo.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Globalization\NumberStyles.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Globalization\PersianCalendar.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Globalization\RegionInfo.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Globalization\SortKey.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Globalization\SortVersion.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Globalization\StringInfo.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Globalization\TaiwanCalendar.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Globalization\TaiwanLunisolarCalendar.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Globalization\TextElementEnumerator.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Globalization\TextInfo.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Globalization\ThaiBuddhistCalendar.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Globalization\TimeSpanFormat.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Globalization\TimeSpanParse.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Globalization\UmAlQuraCalendar.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Globalization\UnicodeCategory.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Globalization\TimeSpanStyles.cs" />
   </ItemGroup>
   <ItemGroup Condition="'$(FeatureCoreFxGlobalization)' != 'true'">
     <Compile Include="$(BclSourcesRoot)\System\Globalization\EncodingDataItem.cs" />
@@ -581,24 +548,15 @@
     <Compile Include="$(BclSourcesRoot)\System\Globalization\JapaneseCalendar.Win32.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Globalization\TextInfo.Windows.cs" />
   </ItemGroup>
-  <ItemGroup Condition="'$(FeatureCoreFxGlobalization)' == 'true' and '$(TargetsUnix)' == 'true'">
+  <ItemGroup Condition="'$(TargetsUnix)' == 'true'">
     <Compile Include="$(BclSourcesRoot)\System\Globalization\EncodingTable.Unix.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Globalization\EncodingDataItem.Unix.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Text\Normalization.Unix.cs" />
-    <Compile Include="$(BclSourcesRoot)\Interop\Unix\System.Globalization.Native\Interop.Calendar.cs" />
-    <Compile Include="$(BclSourcesRoot)\Interop\Unix\System.Globalization.Native\Interop.Casing.cs" />
     <Compile Include="$(BclSourcesRoot)\Interop\Unix\System.Globalization.Native\Interop.Collation.cs" />
     <Compile Include="$(BclSourcesRoot)\Interop\Unix\System.Globalization.Native\Interop.ICU.cs" />
-    <Compile Include="$(BclSourcesRoot)\Interop\Unix\System.Globalization.Native\Interop.Idna.cs" />
-    <Compile Include="$(BclSourcesRoot)\Interop\Unix\System.Globalization.Native\Interop.Locale.cs" />
-    <Compile Include="$(BclSourcesRoot)\Interop\Unix\System.Globalization.Native\Interop.Normalization.cs" />
-    <Compile Include="$(BclSourcesRoot)\Interop\Unix\System.Globalization.Native\Interop.ResultCode.cs" />
-    <Compile Include="$(BclSourcesRoot)\Interop\Unix\System.Globalization.Native\Interop.TimeZoneInfo.cs" />
-    <Compile Include="$(BclSourcesRoot)\Interop\Unix\System.Globalization.Native\Interop.Utils.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Globalization\HijriCalendar.Unix.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Globalization\IdnMapping.Unix.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Globalization\JapaneseCalendar.Unix.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Globalization\LocaleData.Unix.cs" />
   </ItemGroup>
   <ItemGroup>
     <Compile Include="$(BclSourcesRoot)\System\Threading\AbandonedMutexException.cs" />
@@ -620,7 +578,6 @@
     <Compile Include="$(BclSourcesRoot)\System\Threading\SemaphoreFullException.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Threading\SynchronizationLockException.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Threading\Thread.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Threading\ThreadAbortException.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Threading\ThreadInterruptedException.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Threading\ThreadPool.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Threading\ThreadPriority.cs" />
@@ -646,9 +603,6 @@
     <Compile Include="$(BclSourcesRoot)\System\Threading\Tasks\FutureFactory.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Threading\Tasks\Task.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Threading\Tasks\TaskContinuation.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Threading\Tasks\TaskCanceledException.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Threading\Tasks\TaskExtensions.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Threading\Tasks\TaskSchedulerException.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Threading\Tasks\TaskExceptionHolder.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Threading\Tasks\TaskFactory.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Threading\Tasks\TaskScheduler.cs" />
@@ -680,9 +634,9 @@
     <Compile Include="$(BclSourcesRoot)\System\IO\EndOfStreamException.cs" />
     <Compile Include="$(BclSourcesRoot)\System\IO\File.cs" />
     <Compile Include="$(BclSourcesRoot)\System\IO\FileAccess.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\IO\FileLoadException.cs" />
+    <Compile Include="$(BclSourcesRoot)\System\IO\FileLoadException.CoreCLR.cs" />
     <Compile Include="$(BclSourcesRoot)\System\IO\FileMode.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\IO\FileNotFoundException.cs" />
+    <Compile Include="$(BclSourcesRoot)\System\IO\FileNotFoundException.CoreCLR.cs" />
     <Compile Include="$(BclSourcesRoot)\System\IO\FileOptions.cs" />
     <Compile Include="$(BclSourcesRoot)\System\IO\FileShare.cs" />
     <Compile Include="$(BclSourcesRoot)\System\IO\FileSystemEnumerable.cs" Condition="'$(TargetsUnix)' == 'true'" />
@@ -692,7 +646,6 @@
     <Compile Include="$(BclSourcesRoot)\System\IO\PinnedBufferMemoryStream.cs" />
     <Compile Include="$(BclSourcesRoot)\System\IO\SeekOrigin.cs" />
     <Compile Include="$(BclSourcesRoot)\System\IO\Stream.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\IO\StreamHelpers.CopyValidation.cs" />
     <Compile Include="$(BclSourcesRoot)\System\IO\TextReader.cs" Condition="'$(TargetsUnix)' == 'true'" />
     <Compile Include="$(BclSourcesRoot)\System\IO\StreamReader.cs" Condition="'$(TargetsUnix)' == 'true'" />
     <Compile Include="$(BclSourcesRoot)\System\IO\UnmanagedMemoryAccessor.cs" />
@@ -701,17 +654,15 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="$(BclSourcesRoot)\System\Security\DynamicSecurityMethodAttribute.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Security\SecurityState.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Security\VerificationException.cs" />
-  </ItemGroup>
-  <ItemGroup>
-    <Compile Include="$(BclSourcesRoot)\System\Security\Util\URLString.cs" />
   </ItemGroup>
   <ItemGroup>
     <Compile Include="$(BclSourcesRoot)\System\Diagnostics\Assert.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Diagnostics\AssertFilter.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Diagnostics\AssertFilters.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Diagnostics\ConditionalAttribute.cs" />
+    <Compile Include="$(BclSourcesRoot)\System\Diagnostics\Debug.Unix.cs" Condition="'$(TargetsUnix)' == 'true'" />
+    <Compile Include="$(BclSourcesRoot)\System\Diagnostics\Debug.Windows.cs" Condition="'$(TargetsUnix)' != 'true'" />
     <Compile Include="$(BclSourcesRoot)\System\Diagnostics\Debugger.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Diagnostics\DebuggerAttributes.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Diagnostics\ICustomDebuggerNotification.cs" />
@@ -721,46 +672,9 @@
     <Compile Include="$(BclSourcesRoot)\System\Diagnostics\Stacktrace.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Diagnostics\Stackframe.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Diagnostics\EditAndContinueHelper.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Diagnostics\Eventing\ActivityTracker.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Diagnostics\Eventing\EventActivityOptions.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Diagnostics\Eventing\EventDescriptor.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Diagnostics\Eventing\EventProvider.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Diagnostics\Eventing\EventSource.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Diagnostics\Eventing\EventSource_CoreCLR.cs" />
     <Compile Condition="'$(FeatureXplatEventSource)' == 'true'" Include="$(BclSourcesRoot)\System\Diagnostics\Eventing\XplatEventLogger.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Diagnostics\Eventing\EventSourceException.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Diagnostics\Eventing\FrameworkEventSource.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Diagnostics\Eventing\StubEnvironment.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Diagnostics\Eventing\Winmeta.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Diagnostics\Eventing\TraceLogging\ArrayTypeInfo.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Diagnostics\Eventing\TraceLogging\ConcurrentSet.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Diagnostics\Eventing\TraceLogging\ConcurrentSetItem.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Diagnostics\Eventing\TraceLogging\DataCollector.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Diagnostics\Eventing\TraceLogging\EmptyStruct.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Diagnostics\Eventing\TraceLogging\EnumerableTypeInfo.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Diagnostics\Eventing\TraceLogging\EnumHelper.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Diagnostics\Eventing\TraceLogging\EventDataAttribute.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Diagnostics\Eventing\TraceLogging\EventFieldAttribute.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Diagnostics\Eventing\TraceLogging\EventFieldFormat.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Diagnostics\Eventing\TraceLogging\EventIgnoreAttribute.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Diagnostics\Eventing\TraceLogging\EventPayload.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Diagnostics\Eventing\TraceLogging\EventSourceOptions.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Diagnostics\Eventing\TraceLogging\FieldMetadata.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Diagnostics\Eventing\TraceLogging\InvokeTypeInfo.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Diagnostics\Eventing\TraceLogging\NameInfo.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Diagnostics\Eventing\TraceLogging\PropertyValue.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Diagnostics\Eventing\TraceLogging\PropertyAnalysis.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Diagnostics\Eventing\TraceLogging\SimpleEventTypes.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Diagnostics\Eventing\TraceLogging\SimpleTypeInfos.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Diagnostics\Eventing\TraceLogging\Statics.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Diagnostics\Eventing\TraceLogging\TraceLoggingDataCollector.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Diagnostics\Eventing\TraceLogging\TraceLoggingDataType.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Diagnostics\Eventing\TraceLogging\TraceLoggingEventSource.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Diagnostics\Eventing\TraceLogging\TraceLoggingEventTraits.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Diagnostics\Eventing\TraceLogging\TraceLoggingEventTypes.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Diagnostics\Eventing\TraceLogging\TraceLoggingMetadataCollector.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Diagnostics\Eventing\TraceLogging\TraceLoggingTypeInfo.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Diagnostics\Eventing\TraceLogging\TypeAnalysis.cs" />
   </ItemGroup>
   <ItemGroup>
     <Compile Include="$(BclSourcesRoot)\System\Diagnostics\CodeAnalysis\SuppressMessageAttribute.cs" />
@@ -821,7 +735,6 @@
     <Compile Include="$(BclSourcesRoot)\System\Text\EncoderFallback.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Text\EncoderReplacementFallback.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Text\Encoding.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Text\EncodingForwarder.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Text\EncodingInfo.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Text\EncodingNLS.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Text\EncodingProvider.cs" />
@@ -838,7 +751,6 @@
     <Compile Condition="'$(FeatureWin32Registry)' == 'true'" Include="$(BclSourcesRoot)\Microsoft\Win32\Registry.cs" />
     <Compile Condition="'$(FeatureWin32Registry)' == 'true'" Include="$(BclSourcesRoot)\Microsoft\Win32\RegistryKey.cs" />
     <Compile Condition="'$(FeatureWin32Registry)' == 'true'" Include="$(BclSourcesRoot)\Microsoft\Win32\RegistryValueKind.cs" />
-    <Compile Condition="'$(FeatureWin32Registry)' == 'true'" Include="$(BclSourcesRoot)\Microsoft\Win32\RegistryView.cs" />
     <Compile Condition="'$(FeatureClassicCominterop)' == 'true'" Include="$(BclSourcesRoot)\Microsoft\Win32\OAVariantLib.cs" />
   </ItemGroup>
   <ItemGroup>
@@ -894,28 +806,17 @@
     <Compile Include="$(BclSourcesRoot)\Interop\Windows\Normaliz\Interop.Idna.cs" />
     <Compile Include="$(BclSourcesRoot)\Interop\Windows\Normaliz\Interop.Normalization.cs" />
   </ItemGroup>
-  <ItemGroup>
-    <Compile Include="$(BclSourcesRoot)\System\Security\SecureString.cs" />
-  </ItemGroup>
   <ItemGroup Condition="'$(TargetsUnix)' != 'true'">
     <Compile Include="$(BclSourcesRoot)\System\Security\SafeBSTRHandle.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Security\SecureString.Windows.cs" />
     <!-- Interop sources -->
-    <Compile Include="$(BclSourcesRoot)\Interop\Windows\Crypt32\Interop.CryptProtectMemory.cs" />
     <Compile Include="$(BclSourcesRoot)\Interop\Windows\NtDll\Interop.ZeroMemory.cs" />
-    <Compile Include="$(BclSourcesRoot)\Interop\Windows\kernel32\Interop.WideCharToMultiByte.cs" />
     <Compile Include="$(BclSourcesRoot)\Interop\Windows\oleaut32\Interop.SysAllocStringLen.cs" />
     <Compile Include="$(BclSourcesRoot)\Interop\Windows\oleaut32\Interop.SysStringLen.cs" />
   </ItemGroup>
   <ItemGroup Condition="'$(TargetsUnix)' == 'true'">
-    <Compile Include="$(BclSourcesRoot)\System\Security\SecureString.Unix.cs" />
-  </ItemGroup>
-  <ItemGroup Condition="'$(TargetsUnix)' == 'true'">
     <Compile Include="$(BclSourcesRoot)\System\HResults.cs" />
     <Compile Include="$(BclSourcesRoot)\Interop\Unix\System.Native\Interop.GetRandomBytes.cs" />
-  </ItemGroup>
-  <ItemGroup>
-    <Compile Include="$(BclSourcesRoot)\Debug.cs" />
   </ItemGroup>
   <!-- Include additional sources shared files in the compilation -->
   <ItemGroup>

@@ -677,11 +677,6 @@ void Compiler::lvaInitUserArgs(InitVarDscInfo* varDscInfo)
                 codeGen->regSet.rsMaskPreSpillRegArg |= regMask;
             }
         }
-        else
-        {
-            varDsc->lvOnFrame = true; // The final home for this incoming register might be our local stack frame
-        }
-
 #else // !_TARGET_ARM_
 #if defined(FEATURE_UNIX_AMD64_STRUCT_PASSING)
         SYSTEMV_AMD64_CORINFO_STRUCT_REG_PASSING_DESCRIPTOR structDesc;
@@ -723,12 +718,11 @@ void Compiler::lvaInitUserArgs(InitVarDscInfo* varDscInfo)
             }
         }
 #endif // FEATURE_UNIX_AMD64_STRUCT_PASSING
+#endif // !_TARGET_ARM_
 
         // The final home for this incoming register might be our local stack frame.
         // For System V platforms the final home will always be on the local stack frame.
         varDsc->lvOnFrame = true;
-
-#endif // !_TARGET_ARM_
 
         bool canPassArgInRegisters = false;
 
@@ -2312,6 +2306,15 @@ void Compiler::lvaSetStruct(unsigned varNum, CORINFO_CLASS_HANDLE typeHnd, bool 
 void Compiler::lvaSetClass(unsigned varNum, CORINFO_CLASS_HANDLE clsHnd, bool isExact)
 {
     noway_assert(varNum < lvaCount);
+
+    // If we are just importing, we cannot reliably track local ref types,
+    // since the jit maps CORINFO_TYPE_VAR to TYP_REF.
+    if (compIsForImportOnly())
+    {
+        return;
+    }
+
+    // Else we should have a type handle.
     assert(clsHnd != nullptr);
 
     LclVarDsc* varDsc = &lvaTable[varNum];
@@ -2384,6 +2387,15 @@ void Compiler::lvaSetClass(unsigned varNum, GenTreePtr tree, CORINFO_CLASS_HANDL
 void Compiler::lvaUpdateClass(unsigned varNum, CORINFO_CLASS_HANDLE clsHnd, bool isExact)
 {
     noway_assert(varNum < lvaCount);
+
+    // If we are just importing, we cannot reliably track local ref types,
+    // since the jit maps CORINFO_TYPE_VAR to TYP_REF.
+    if (compIsForImportOnly())
+    {
+        return;
+    }
+
+    // Else we should have a class handle to consider
     assert(clsHnd != nullptr);
 
     LclVarDsc* varDsc = &lvaTable[varNum];
@@ -2392,12 +2404,22 @@ void Compiler::lvaUpdateClass(unsigned varNum, CORINFO_CLASS_HANDLE clsHnd, bool
     // We should already have a class
     assert(varDsc->lvClassHnd != nullptr);
 
-    // This should be the first and only update for this var
-    assert(!varDsc->lvClassInfoUpdated);
-
 #if defined(DEBUG)
+
+    // In general we only expect one update per local var. However if
+    // a block is re-imported and that block has the only STLOC for
+    // the var, we may see multiple updates. All subsequent updates
+    // should agree on the type, since reimportation is triggered by
+    // type mismatches for things other than ref types.
+    if (varDsc->lvClassInfoUpdated)
+    {
+        assert(varDsc->lvClassHnd == clsHnd);
+        assert(varDsc->lvClassIsExact == isExact);
+    }
+
     // This counts as an update, even if nothing changes.
     varDsc->lvClassInfoUpdated = true;
+
 #endif // defined(DEBUG)
 
     // If previous type was exact, there is nothing to update.  Would
@@ -3600,23 +3622,9 @@ void Compiler::lvaMarkLclRefs(GenTreePtr tree)
     }
 
 #if ASSERTION_PROP
-    /* Exclude the normal entry block */
-    if (fgDomsComputed && (lvaMarkRefsCurBlock->bbNum != 1) && lvaMarkRefsCurBlock->bbIDom != nullptr)
+    if (fgDomsComputed && IsDominatedByExceptionalEntry(lvaMarkRefsCurBlock))
     {
-        // If any entry block except the normal entry block dominates the block, then mark the local with the
-        // lvVolatileHint flag.
-
-        if (BlockSetOps::MayBeUninit(lvaMarkRefsCurBlock->bbDoms))
-        {
-            // Lazy init (If a block is not dominated by any other block, we'll redo this every time, but it'll be fast)
-            BlockSetOps::AssignNoCopy(this, lvaMarkRefsCurBlock->bbDoms, fgGetDominatorSet(lvaMarkRefsCurBlock));
-            BlockSetOps::RemoveElemD(this, lvaMarkRefsCurBlock->bbDoms, fgFirstBB->bbNum);
-        }
-        assert(fgEnterBlksSetValid);
-        if (!BlockSetOps::IsEmptyIntersection(this, lvaMarkRefsCurBlock->bbDoms, fgEnterBlks))
-        {
-            varDsc->lvVolatileHint = 1;
-        }
+        SetVolatileHint(varDsc);
     }
 
     /* Record if the variable has a single def or not */
@@ -3699,6 +3707,29 @@ void Compiler::lvaMarkLclRefs(GenTreePtr tree)
         }
     }
 #endif
+}
+
+//------------------------------------------------------------------------
+// IsDominatedByExceptionalEntry: Check is the block dominated by an exception entry block.
+//
+// Arguments:
+//    block - the checking block.
+//
+bool Compiler::IsDominatedByExceptionalEntry(BasicBlock* block)
+{
+    assert(fgDomsComputed);
+    return block->IsDominatedByExceptionalEntryFlag();
+}
+
+//------------------------------------------------------------------------
+// SetVolatileHint: Set a local var's volatile hint.
+//
+// Arguments:
+//    varDsc - the local variable that needs the hint.
+//
+void Compiler::SetVolatileHint(LclVarDsc* varDsc)
+{
+    varDsc->lvVolatileHint = true;
 }
 
 /*****************************************************************************

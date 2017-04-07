@@ -2413,6 +2413,7 @@ void Compiler::fgComputeDoms()
     bbRoot.bbNum    = 0;
     bbRoot.bbIDom   = &bbRoot;
     bbRoot.bbDfsNum = 0;
+    bbRoot.bbFlags  = 0;
     flRoot.flNext   = nullptr;
     flRoot.flBlock  = &bbRoot;
 
@@ -2534,6 +2535,8 @@ void Compiler::fgComputeDoms()
             block->bbPreds = nullptr;
         }
     }
+
+    fgCompDominatedByExceptionalEntryBlocks();
 
 #ifdef DEBUG
     if (verbose)
@@ -7118,7 +7121,9 @@ bool Compiler::fgAddrCouldBeNull(GenTreePtr addr)
  *  Optimize the call to the delegate constructor.
  */
 
-GenTreePtr Compiler::fgOptimizeDelegateConstructor(GenTreeCall* call, CORINFO_CONTEXT_HANDLE* ExactContextHnd)
+GenTreePtr Compiler::fgOptimizeDelegateConstructor(GenTreeCall*            call,
+                                                   CORINFO_CONTEXT_HANDLE* ExactContextHnd,
+                                                   CORINFO_RESOLVED_TOKEN* ldftnToken)
 {
     noway_assert(call->gtCallType == CT_USER_FUNC);
     CORINFO_METHOD_HANDLE methHnd = call->gtCallMethHnd;
@@ -7182,8 +7187,37 @@ GenTreePtr Compiler::fgOptimizeDelegateConstructor(GenTreeCall* call, CORINFO_CO
 #ifdef FEATURE_READYTORUN_COMPILER
     if (opts.IsReadyToRun())
     {
+        if (IsTargetAbi(CORINFO_CORERT_ABI))
+        {
+            if (ldftnToken != nullptr)
+            {
+                GenTreePtr           thisPointer       = call->gtCallObjp;
+                GenTreePtr           targetObjPointers = call->gtCallArgs->Current();
+                GenTreeArgList*      helperArgs        = nullptr;
+                CORINFO_LOOKUP       pLookup;
+                CORINFO_CONST_LOOKUP entryPoint;
+                info.compCompHnd->getReadyToRunDelegateCtorHelper(ldftnToken, clsHnd, &pLookup);
+                if (!pLookup.lookupKind.needsRuntimeLookup)
+                {
+                    helperArgs = gtNewArgList(thisPointer, targetObjPointers);
+                    entryPoint = pLookup.constLookup;
+                }
+                else
+                {
+                    assert(oper != GT_FTN_ADDR);
+                    CORINFO_CONST_LOOKUP genericLookup;
+                    info.compCompHnd->getReadyToRunHelper(ldftnToken, &pLookup.lookupKind,
+                                                          CORINFO_HELP_READYTORUN_GENERIC_HANDLE, &genericLookup);
+                    GenTreePtr ctxTree = getRuntimeContextTree(pLookup.lookupKind.runtimeLookupKind);
+                    helperArgs         = gtNewArgList(thisPointer, targetObjPointers, ctxTree);
+                    entryPoint         = genericLookup;
+                }
+                call = gtNewHelperCallNode(CORINFO_HELP_READYTORUN_DELEGATE_CTOR, TYP_VOID, GTF_EXCEPT, helperArgs);
+                call->setEntryPoint(entryPoint);
+            }
+        }
         // ReadyToRun has this optimization for a non-virtual function pointers only for now.
-        if (oper == GT_FTN_ADDR)
+        else if (oper == GT_FTN_ADDR)
         {
             GenTreePtr      thisPointer       = call->gtCallObjp;
             GenTreePtr      targetObjPointers = call->gtCallArgs->Current();
@@ -7191,8 +7225,7 @@ GenTreePtr Compiler::fgOptimizeDelegateConstructor(GenTreeCall* call, CORINFO_CO
 
             call = gtNewHelperCallNode(CORINFO_HELP_READYTORUN_DELEGATE_CTOR, TYP_VOID, GTF_EXCEPT, helperArgs);
 
-            CORINFO_RESOLVED_TOKEN* ldftnToken = targetMethod->gtFptrVal.gtLdftnResolvedToken;
-            CORINFO_LOOKUP          entryPoint;
+            CORINFO_LOOKUP entryPoint;
             info.compCompHnd->getReadyToRunDelegateCtorHelper(ldftnToken, clsHnd, &entryPoint);
             assert(!entryPoint.lookupKind.needsRuntimeLookup);
             call->setEntryPoint(entryPoint.constLookup);
@@ -23375,6 +23408,7 @@ void Compiler::fgRemoveEmptyTry()
         // Handler index of any nested blocks will update when we
         // remove the EH table entry.  Change handler exits to jump to
         // the continuation.  Clear catch type on handler entry.
+        // Decrement nesting level of enclosed GT_END_LFINs.
         for (BasicBlock* block = firstHandlerBlock; block != endHandlerBlock; block = block->bbNext)
         {
             if (block == firstHandlerBlock)
@@ -23404,6 +23438,22 @@ void Compiler::fgRemoveEmptyTry()
                     fgAddRefPred(continuation, block);
                 }
             }
+
+#if !FEATURE_EH_FUNCLETS
+            // If we're in a non-funclet model, decrement the nesting
+            // level of any GT_END_LFIN we find in the handler region,
+            // since we're removing the enclosing handler.
+            for (GenTreeStmt* stmt = block->firstStmt(); stmt != nullptr; stmt = stmt->gtNextStmt)
+            {
+                GenTreePtr expr = stmt->gtStmtExpr;
+                if (expr->gtOper == GT_END_LFIN)
+                {
+                    const unsigned nestLevel = expr->gtVal.gtVal1;
+                    assert(nestLevel > 0);
+                    expr->gtVal.gtVal1 = nestLevel - 1;
+                }
+            }
+#endif // !FEATURE_EH_FUNCLETS
         }
 
         // (6) Remove the try-finally EH region. This will compact the
@@ -25033,4 +25083,31 @@ unsigned Compiler::fgMeasureIR()
     }
 
     return nodeCount;
+}
+
+//------------------------------------------------------------------------
+// fgCompDominatedByExceptionalEntryBlocks: compute blocks that are
+// dominated by not normal entry.
+//
+void Compiler::fgCompDominatedByExceptionalEntryBlocks()
+{
+    assert(fgEnterBlksSetValid);
+    if (BlockSetOps::Count(this, fgEnterBlks) != 1) // There are exception entries.
+    {
+        for (unsigned i = 1; i <= fgBBNumMax; ++i)
+        {
+            BasicBlock* block = fgBBInvPostOrder[i];
+            if (BlockSetOps::IsMember(this, fgEnterBlks, block->bbNum))
+            {
+                if (fgFirstBB != block) // skip the normal entry.
+                {
+                    block->SetDominatedByExceptionalEntryFlag();
+                }
+            }
+            else if (block->bbIDom->IsDominatedByExceptionalEntryFlag())
+            {
+                block->SetDominatedByExceptionalEntryFlag();
+            }
+        }
+    }
 }

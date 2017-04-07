@@ -143,6 +143,7 @@
 #include "mscoree.h"
 #include "appdomainstack.h"
 #include "gcheaputilities.h"
+#include "gchandletableutilities.h"
 #include "gcinfotypes.h"
 #include <clrhost.h>
 
@@ -5555,6 +5556,7 @@ private:
 private:
     static LONG s_DeadThreadCountThresholdForGCTrigger;
     static DWORD s_DeadThreadGCTriggerPeriodMilliseconds;
+    static SIZE_T *s_DeadThreadGenerationCounts;
 
 public:
 
