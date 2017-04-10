@@ -21,7 +21,7 @@ static void DoPointerTest(WCHAR *formatstr, void* param, WCHAR* paramstr,
 {
     WCHAR buf[256] = { 0 };
 
-    testvswp(buf, formatstr, param);
+    testvswp(buf, _countof(buf), formatstr, param);
     if (memcmp(buf, checkstr1, wcslen(checkstr1) + 2) != 0)
 
     {
@@ -39,7 +39,7 @@ static void DoI64DoubleTest(WCHAR *formatstr, INT64 value, WCHAR *valuestr,
 {
     WCHAR buf[256] = { 0 };
  
-    testvswp(buf, formatstr, value);
+    testvswp(buf, _countof(buf), formatstr, value);
     if (memcmp(buf, checkstr1, wcslen(checkstr1) + 2) != 0)
     {
         Fail("ERROR: failed to insert %s into \"%s\"\n"
@@ -62,7 +62,7 @@ int __cdecl main(int argc, char *argv[])
 /*
 **  Run only on 64 bit platforms
 */
-#if defined(BIT64) && defined(PLATFORM_UNIX)
+#if defined(BIT64)
 	Trace("Testing for 64 Bit Platforms \n");
 	DoPointerTest(convert("%p"), NULL, convert("NULL"), convert("0000000000000000"));
     DoPointerTest(convert("%p"), ptr, convert("pointer to 0x123456"), 

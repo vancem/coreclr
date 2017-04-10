@@ -9,28 +9,26 @@
 **
 ** 
 ===========================================================*/
-namespace System.Threading
-{    
-    using System;
-    using System.Security;
-    using System.Runtime.Remoting;
-    using System.Collections;
-    using System.Collections.Generic;
-    using System.Reflection;
-    using System.Runtime.ExceptionServices;
-    using System.Runtime.Serialization;
-    using System.Security.Permissions;
-    using System.Runtime.InteropServices;
-    using System.Runtime.CompilerServices;
-    using System.Runtime.ConstrainedExecution;
-    using System.Diagnostics.Contracts;
-    using System.Diagnostics.CodeAnalysis;
 
-    [System.Security.SecurityCritical] // auto-generated
-    [System.Runtime.InteropServices.ComVisible(true)]
+using System;
+using System.Security;
+using System.Runtime.Remoting;
+using System.Collections;
+using System.Collections.Generic;
+using System.Reflection;
+using System.Runtime.ExceptionServices;
+using System.Runtime.Serialization;
+using System.Runtime.InteropServices;
+using System.Runtime.CompilerServices;
+using System.Runtime.ConstrainedExecution;
+using System.Diagnostics;
+using System.Diagnostics.Contracts;
+using System.Diagnostics.CodeAnalysis;
+
+namespace System.Threading
+{
     public delegate void ContextCallback(Object state);
 
-    [SecurityCritical]
     internal struct ExecutionContextSwitcher
     {
         internal ExecutionContext m_ec;
@@ -38,14 +36,14 @@ namespace System.Threading
 
         internal void Undo(Thread currentThread)
         {
-            Contract.Assert(currentThread == Thread.CurrentThread);
+            Debug.Assert(currentThread == Thread.CurrentThread);
 
             // The common case is that these have not changed, so avoid the cost of a write if not needed.
             if (currentThread.SynchronizationContext != m_sc)
             {
                 currentThread.SynchronizationContext = m_sc;
             }
-            
+
             if (currentThread.ExecutionContext != m_ec)
             {
                 ExecutionContext.Restore(currentThread, m_ec);
@@ -56,7 +54,7 @@ namespace System.Threading
     [Serializable]
     public sealed class ExecutionContext : IDisposable, ISerializable
     {
-        private static readonly ExecutionContext Default = new ExecutionContext();
+        internal static readonly ExecutionContext Default = new ExecutionContext();
 
         private readonly IAsyncLocalValueMap m_localValues;
         private readonly IAsyncLocal[] m_localChangeNotifications;
@@ -91,25 +89,18 @@ namespace System.Threading
         {
         }
 
-        [SecuritySafeCritical]
         public static ExecutionContext Capture()
         {
             ExecutionContext executionContext = Thread.CurrentThread.ExecutionContext;
-            if (executionContext == null)
-            {
-                return Default;
-            }
-            if (executionContext.m_isFlowSuppressed)
-            {
-                // Prevent ExecutionContext.Run on a suppressed-flow context for desktop framework compatibility
-                return null;
-            }
-            return executionContext;
+            return
+                executionContext == null ? Default :
+                executionContext.m_isFlowSuppressed ? null :
+                executionContext;
         }
 
         private ExecutionContext ShallowClone(bool isFlowSuppressed)
         {
-            Contract.Assert(isFlowSuppressed != m_isFlowSuppressed);
+            Debug.Assert(isFlowSuppressed != m_isFlowSuppressed);
 
             if (!isFlowSuppressed &&
                 m_localValues == Default.m_localValues &&
@@ -126,7 +117,7 @@ namespace System.Threading
             ExecutionContext executionContext = currentThread.ExecutionContext ?? Default;
             if (executionContext.m_isFlowSuppressed)
             {
-                throw new InvalidOperationException(Environment.GetResourceString("InvalidOperation_CannotSupressFlowMultipleTimes"));
+                throw new InvalidOperationException(SR.InvalidOperation_CannotSupressFlowMultipleTimes);
             }
             Contract.EndContractBlock();
 
@@ -143,7 +134,7 @@ namespace System.Threading
             ExecutionContext executionContext = currentThread.ExecutionContext;
             if (executionContext == null || !executionContext.m_isFlowSuppressed)
             {
-                throw new InvalidOperationException(Environment.GetResourceString("InvalidOperation_CannotRestoreUnsupressedFlow"));
+                throw new InvalidOperationException(SR.InvalidOperation_CannotRestoreUnsupressedFlow);
             }
             Contract.EndContractBlock();
 
@@ -156,12 +147,11 @@ namespace System.Threading
             return executionContext != null && executionContext.m_isFlowSuppressed;
         }
 
-        [SecurityCritical]
         [HandleProcessCorruptedStateExceptions]
         public static void Run(ExecutionContext executionContext, ContextCallback callback, Object state)
         {
             if (executionContext == null)
-                throw new InvalidOperationException(Environment.GetResourceString("InvalidOperation_NullContext"));
+                throw new InvalidOperationException(SR.InvalidOperation_NullContext);
 
             Thread currentThread = Thread.CurrentThread;
             ExecutionContextSwitcher ecsw = default(ExecutionContextSwitcher);
@@ -183,41 +173,38 @@ namespace System.Threading
             ecsw.Undo(currentThread);
         }
 
-        [SecurityCritical]
         internal static void Restore(Thread currentThread, ExecutionContext executionContext)
         {
-            Contract.Assert(currentThread == Thread.CurrentThread);
+            Debug.Assert(currentThread == Thread.CurrentThread);
 
             ExecutionContext previous = currentThread.ExecutionContext ?? Default;
             currentThread.ExecutionContext = executionContext;
-            
+
             // New EC could be null if that's what ECS.Undo saved off.
             // For the purposes of dealing with context change, treat this as the default EC
             executionContext = executionContext ?? Default;
-            
+
             if (previous != executionContext)
             {
                 OnContextChanged(previous, executionContext);
             }
         }
 
-        [SecurityCritical]
         static internal void EstablishCopyOnWriteScope(Thread currentThread, ref ExecutionContextSwitcher ecsw)
         {
-            Contract.Assert(currentThread == Thread.CurrentThread);
-            
-            ecsw.m_ec = currentThread.ExecutionContext; 
+            Debug.Assert(currentThread == Thread.CurrentThread);
+
+            ecsw.m_ec = currentThread.ExecutionContext;
             ecsw.m_sc = currentThread.SynchronizationContext;
         }
 
-        [SecurityCritical]
         [HandleProcessCorruptedStateExceptions]
         private static void OnContextChanged(ExecutionContext previous, ExecutionContext current)
         {
-            Contract.Assert(previous != null);
-            Contract.Assert(current != null);
-            Contract.Assert(previous != current);
-            
+            Debug.Assert(previous != null);
+            Debug.Assert(current != null);
+            Debug.Assert(previous != current);
+
             foreach (IAsyncLocal local in previous.m_localChangeNotifications)
             {
                 object previousValue;
@@ -251,13 +238,12 @@ namespace System.Threading
                 catch (Exception ex)
                 {
                     Environment.FailFast(
-                        Environment.GetResourceString("ExecutionContext_ExceptionInAsyncLocalNotification"), 
+                        SR.ExecutionContext_ExceptionInAsyncLocalNotification,
                         ex);
                 }
-            }        
+            }
         }
 
-        [SecurityCritical]
         internal static object GetLocalValue(IAsyncLocal local)
         {
             ExecutionContext current = Thread.CurrentThread.ExecutionContext;
@@ -269,7 +255,6 @@ namespace System.Threading
             return value;
         }
 
-        [SecurityCritical]
         internal static void SetLocalValue(IAsyncLocal local, object newValue, bool needChangeNotifications)
         {
             ExecutionContext current = Thread.CurrentThread.ExecutionContext ?? ExecutionContext.Default;
@@ -290,7 +275,7 @@ namespace System.Threading
             {
                 if (hadPreviousValue)
                 {
-                    Contract.Assert(Array.IndexOf(newChangeNotifications, local) >= 0);
+                    Debug.Assert(Array.IndexOf(newChangeNotifications, local) >= 0);
                 }
                 else
                 {
@@ -309,43 +294,6 @@ namespace System.Threading
             }
         }
 
-    #region Wrappers for CLR compat, to avoid ifdefs all over the BCL
-
-        [Flags]
-        internal enum CaptureOptions
-        {
-            None = 0x00,
-            IgnoreSyncCtx = 0x01,
-            OptimizeDefaultCase = 0x02,
-        }
-
-        [SecurityCritical]
-        internal static ExecutionContext Capture(ref StackCrawlMark stackMark, CaptureOptions captureOptions)
-        {
-            return Capture();
-        }
-
-        [SecuritySafeCritical]
-        [FriendAccessAllowed]
-        internal static ExecutionContext FastCapture()
-        {
-            return Capture();
-        }
-
-        [SecurityCritical]
-        [FriendAccessAllowed]
-        internal static void Run(ExecutionContext executionContext, ContextCallback callback, Object state, bool preserveSyncCtx)
-        {
-            Run(executionContext, callback, state);
-        }
-
-        [SecurityCritical]
-        internal bool IsDefaultFTContext(bool ignoreSyncCtx)
-        {
-            return this == Default;
-        }
-
-        [SecuritySafeCritical]
         public ExecutionContext CreateCopy()
         {
             return this; // since CoreCLR's ExecutionContext is immutable, we don't need to create copies.
@@ -355,19 +303,6 @@ namespace System.Threading
         {
             // For CLR compat only
         }
-
-        internal static ExecutionContext PreAllocatedDefault
-        {
-            [SecuritySafeCritical]
-            get { return ExecutionContext.Default; }
-        }
-
-        internal bool IsPreAllocatedDefault
-        {
-            get { return this == ExecutionContext.Default; }
-        }
-
-    #endregion
     }
 
     public struct AsyncFlowControl : IDisposable
@@ -376,7 +311,7 @@ namespace System.Threading
 
         internal void Initialize(Thread currentThread)
         {
-            Contract.Assert(currentThread == Thread.CurrentThread);
+            Debug.Assert(currentThread == Thread.CurrentThread);
             _thread = currentThread;
         }
 
@@ -384,11 +319,11 @@ namespace System.Threading
         {
             if (_thread == null)
             {
-                throw new InvalidOperationException(Environment.GetResourceString("InvalidOperation_CannotUseAFCMultiple"));
+                throw new InvalidOperationException(SR.InvalidOperation_CannotUseAFCMultiple);
             }
             if (Thread.CurrentThread != _thread)
             {
-                throw new InvalidOperationException(Environment.GetResourceString("InvalidOperation_CannotUseAFCOtherThread"));
+                throw new InvalidOperationException(SR.InvalidOperation_CannotUseAFCOtherThread);
             }
 
             // An async flow control cannot be undone when a different execution context is applied. The desktop framework
@@ -403,7 +338,7 @@ namespace System.Threading
             // flow is suppressed.
             if (!ExecutionContext.IsFlowSuppressed())
             {
-                throw new InvalidOperationException(Environment.GetResourceString("InvalidOperation_AsyncFlowCtrlCtxMismatch"));
+                throw new InvalidOperationException(SR.InvalidOperation_AsyncFlowCtrlCtxMismatch);
             }
             Contract.EndContractBlock();
 

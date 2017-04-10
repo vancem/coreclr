@@ -248,8 +248,7 @@ inline void *FPREG_Xstate_Ymmh(const ucontext_t *uc)
 
 #define MCREG_Sp(mc)      ((mc).sp)
 #define MCREG_Pc(mc)      ((mc).pc)
-#define MCREG_PState(mc)  ((mc).pstate)
-#define MCREG_Cpsr(mc)    ((mc).cpsr)
+#define MCREG_Cpsr(mc)    ((mc).pstate)
 #else
     // For FreeBSD, as found in x86/ucontext.h
 #define MCREG_Rbp(mc)	    ((mc).mc_rbp)
@@ -485,7 +484,7 @@ inline static DWORD64 CONTEXTGetFP(LPCONTEXT pContext)
 #elif defined(_ARM_)
     return pContext->R7;
 #elif defined(_ARM64_)
-    return pContext->X29;    
+    return pContext->Fp;
 #else
 #error don't know how to get the frame pointer for this architecture
 #endif
@@ -504,6 +503,7 @@ Parameters :
 
 --*/
 void
+PALAPI
 CONTEXT_CaptureContext(
     LPCONTEXT lpContext
     );
@@ -636,6 +636,21 @@ Return value :
 
 --*/
 LPVOID GetNativeContextPC(const native_context_t *context);
+
+/*++
+Function :
+    GetNativeContextSP
+
+    Returns the stack pointer from the native context.
+
+Parameters :
+    const native_context_t *native : native context
+
+Return value :
+    The stack pointer from the native context.
+
+--*/
+LPVOID GetNativeContextSP(const native_context_t *context);
 
 /*++
 Function :

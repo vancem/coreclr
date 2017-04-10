@@ -3,7 +3,7 @@
 # This file invokes cmake and generates the build system for Clang.
 #
 
-if [ $# -lt 4 -o $# -gt 8 ]
+if [ $# -lt 4 ]
 then
   echo "Usage..."
   echo "gen-buildsys-clang.sh <path to top level CMakeLists.txt> <ClangMajorVersion> <ClangMinorVersion> <Architecture> [build flavor] [coverage] [ninja] [cmakeargs]"
@@ -18,18 +18,18 @@ then
 fi
 
 # Set up the environment to be used for building with clang.
-if which "clang-$2.$3" > /dev/null 2>&1
+if command -v "clang-$2.$3" > /dev/null
     then
-        export CC="$(which clang-$2.$3)"
-        export CXX="$(which clang++-$2.$3)"
-elif which "clang$2$3" > /dev/null 2>&1
+        export CC="$(command -v clang-$2.$3)"
+        export CXX="$(command -v clang++-$2.$3)"
+elif command -v "clang$2$3" > /dev/null
     then
-        export CC="$(which clang$2$3)"
-        export CXX="$(which clang++$2$3)"
-elif which clang > /dev/null 2>&1
+        export CC="$(command -v clang$2$3)"
+        export CXX="$(command -v clang++$2$3)"
+elif command -v clang > /dev/null
     then
-        export CC="$(which clang)"
-        export CXX="$(which clang++)"
+        export CC="$(command -v clang)"
+        export CXX="$(command -v clang++)"
 else
     echo "Unable to find Clang Compiler"
     exit 1
@@ -97,12 +97,12 @@ else
   desired_llvm_version="-$desired_llvm_major_version.$desired_llvm_minor_version"
 fi
 locate_llvm_exec() {
-  if which "$llvm_prefix$1$desired_llvm_version" > /dev/null 2>&1
+  if command -v "$llvm_prefix$1$desired_llvm_version" > /dev/null 2>&1
   then
-    echo "$(which $llvm_prefix$1$desired_llvm_version)"
-  elif which "$llvm_prefix$1" > /dev/null 2>&1
+    echo "$(command -v $llvm_prefix$1$desired_llvm_version)"
+  elif command -v "$llvm_prefix$1" > /dev/null 2>&1
   then
-    echo "$(which $llvm_prefix$1)"
+    echo "$(command -v $llvm_prefix$1)"
   else
     exit 1
   fi
@@ -126,24 +126,44 @@ fi
 if [[ -n "$LLDB_INCLUDE_DIR" ]]; then
     cmake_extra_defines="$cmake_extra_defines -DWITH_LLDB_INCLUDES=$LLDB_INCLUDE_DIR"
 fi
+if [[ -n "$CROSSCOMPONENT" ]]; then
+    cmake_extra_defines="$cmake_extra_defines -DCLR_CROSS_COMPONENTS_BUILD=1"
+fi
 if [[ -n "$CROSSCOMPILE" ]]; then
     if ! [[ -n "$ROOTFS_DIR" ]]; then
         echo "ROOTFS_DIR not set for crosscompile"
         exit 1
     fi
     if [[ -z $CONFIG_DIR ]]; then
-      CONFIG_DIR="$1/cross/$build_arch"
+        CONFIG_DIR="$1/cross/$build_arch"
     fi
     cmake_extra_defines="$cmake_extra_defines -C $CONFIG_DIR/tryrun.cmake"
     cmake_extra_defines="$cmake_extra_defines -DCMAKE_TOOLCHAIN_FILE=$CONFIG_DIR/toolchain.cmake"
+    cmake_extra_defines="$cmake_extra_defines -DCLR_UNIX_CROSS_BUILD=1"
 fi
-if [ "$build_arch" == "arm-softfp" ]; then
+if [ $OS == "Linux" ]; then
+    linux_id_file="/etc/os-release"
+    if [[ -n "$CROSSCOMPILE" ]]; then
+        linux_id_file="$ROOTFS_DIR/$linux_id_file"
+    fi
+    if [[ -e $linux_id_file ]]; then
+        source $linux_id_file
+        cmake_extra_defines="$cmake_extra_defines -DCLR_CMAKE_LINUX_ID=$ID"
+    fi
+fi
+if [ "$build_arch" == "armel" ]; then
     cmake_extra_defines="$cmake_extra_defines -DARM_SOFTFP=1"
+fi
+
+if [ "$build_arch" == "arm" -o "$build_arch" == "armel" ]; then
+    overridefile=clang-compiler-override-arm.txt  
+else
+    overridefile=clang-compiler-override.txt  
 fi
 
 cmake \
   -G "$generator" \
-  "-DCMAKE_USER_MAKE_RULES_OVERRIDE=$1/src/pal/tools/clang-compiler-override.txt" \
+  "-DCMAKE_USER_MAKE_RULES_OVERRIDE=$1/src/pal/tools/$overridefile" \
   "-DCMAKE_AR=$llvm_ar" \
   "-DCMAKE_LINKER=$llvm_link" \
   "-DCMAKE_NM=$llvm_nm" \

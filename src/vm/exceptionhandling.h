@@ -26,11 +26,13 @@ ProcessCLRException(IN     PEXCEPTION_RECORD     pExceptionRecord
                     IN OUT PT_DISPATCHER_CONTEXT pDispatcherContext);
 
 
+#ifndef FEATURE_PAL
 void __declspec(noinline)
 ClrUnwindEx(EXCEPTION_RECORD* pExceptionRecord,
                  UINT_PTR          ReturnValue,
                  UINT_PTR          TargetIP,
                  UINT_PTR          TargetFrameSp);
+#endif // !FEATURE_PAL
 
 typedef DWORD_PTR   (HandlerFn)(UINT_PTR uStackFrame, Object* pExceptionObj);
 
@@ -69,9 +71,7 @@ public:
 
     ExceptionTracker() :
         m_pThread(NULL),
-        m_hThrowable(NULL),
-        m_hCallerToken(NULL),
-        m_hImpersonationToken(NULL)
+        m_hThrowable(NULL)
     {
 #ifndef DACCESS_COMPILE
         m_StackTraceInfo.Init();
@@ -87,11 +87,9 @@ public:
         m_CorruptionSeverity = NotSet;
 #endif // FEATURE_CORRUPTING_EXCEPTIONS
 
-#ifdef FEATURE_EXCEPTION_NOTIFICATIONS
         // By default, mark the tracker as not having delivered the first
         // chance exception notification
         m_fDeliveredFirstChanceNotification = FALSE;
-#endif // FEATURE_EXCEPTION_NOTIFICATIONS
 
         m_sfFirstPassTopmostFrame.Clear();
         
@@ -125,9 +123,7 @@ public:
 // these members were added for resume frame processing
         m_pClauseForCatchToken(NULL),
 // end resume frame members
-        m_ExceptionCode(pExceptionRecord->ExceptionCode),
-        m_hCallerToken(NULL),
-        m_hImpersonationToken(NULL)
+        m_ExceptionCode(pExceptionRecord->ExceptionCode)
     {
         m_ptrs.ExceptionRecord  = pExceptionRecord;
         m_ptrs.ContextRecord    = pContextRecord;
@@ -151,11 +147,9 @@ public:
         m_CorruptionSeverity = NotSet;
 #endif // FEATURE_CORRUPTING_EXCEPTIONS
 
-#ifdef FEATURE_EXCEPTION_NOTIFICATIONS
         // By default, mark the tracker as not having delivered the first
         // chance exception notification
         m_fDeliveredFirstChanceNotification = FALSE;
-#endif // FEATURE_EXCEPTION_NOTIFICATIONS
 
         m_dwIndexClauseForCatch = 0;
         m_sfEstablisherOfActualHandlerFrame.Clear();
@@ -393,7 +387,7 @@ public:
 
     bool IsStackOverflowException();
 
-#ifdef FEATURE_PAL
+#if defined(FEATURE_PAL) && !defined(CROSS_COMPILE)
     void TakeExceptionPointersOwnership(PAL_SEHException* ex)
     {
         _ASSERTE(ex->GetExceptionRecord() == m_ptrs.ExceptionRecord);
@@ -401,7 +395,7 @@ public:
         ex->Clear();
         m_fOwnsExceptionPointers = TRUE;
     }
-#endif // FEATURE_PAL
+#endif // FEATURE_PAL && !CROSS_COMPILE
 
 private:
     DWORD_PTR
@@ -410,6 +404,7 @@ private:
                     EE_ILEXCEPTION_CLAUSE*  pEHClause,
                     MethodDesc*             pMD,
                     EHFuncletType funcletType
+                    X86_ARG(PT_CONTEXT pContextRecord)
                     ARM_ARG(PT_CONTEXT pContextRecord)
                     ARM64_ARG(PT_CONTEXT pContextRecord)
                     );
@@ -432,7 +427,7 @@ private:
 
         m_hThrowable = NULL;
     }
-#endif
+#endif // !DACCESS_COMPILE
 
     void SaveStackTrace();
 
@@ -620,7 +615,6 @@ public:
     }
 #endif // FEATURE_CORRUPTING_EXCEPTIONS
 
-#ifdef FEATURE_EXCEPTION_NOTIFICATIONS
 private:
     BOOL                    m_fDeliveredFirstChanceNotification;
 
@@ -638,7 +632,6 @@ public:
     
         m_fDeliveredFirstChanceNotification = fDelivered;
     }
-#endif // FEATURE_EXCEPTION_NOTIFICATIONS
 
     // Returns the exception tracker previous to the current
     inline PTR_ExceptionTracker GetPreviousExceptionTracker()
@@ -659,6 +652,11 @@ public:
     bool IsInFirstPass()
     {
         return !m_ExceptionFlags.UnwindHasStarted();
+    }
+
+    EHClauseInfo* GetEHClauseInfo()
+    {
+        return &m_EHClauseInfo;
     }
     
 private: ;
@@ -749,10 +747,6 @@ private: ;
     DWORD                   m_ExceptionCode;
 
     PTR_Frame               m_pLimitFrame;
-    
-    // Thread Security State
-    HANDLE                  m_hCallerToken;
-    HANDLE                  m_hImpersonationToken;
 
 #ifdef DEBUGGING_SUPPORTED
     //
@@ -783,9 +777,7 @@ private: ;
     EnclosingClauseInfo     m_EnclosingClauseInfoOfCollapsedTracker;
 };
 
-#if defined(WIN64EXCEPTIONS)
 PTR_ExceptionTracker GetEHTrackerForPreallocatedException(OBJECTREF oPreAllocThrowable, PTR_ExceptionTracker pStartingEHTracker);
-#endif // WIN64EXCEPTIONS
 
 class TrackerAllocator
 {

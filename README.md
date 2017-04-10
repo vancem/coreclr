@@ -14,7 +14,7 @@ as part of the application (if desired), and thus can be updated quickly to fix 
 
 ## If You Just Want to Use .NET Core
 
-Most users don't need build .NET Core from source since there is already an built and tested version for any supported platform.
+Most users don't need to build .NET Core from source since there is already an built and tested version for any supported platform.
 You can get the latest **released** version of the .NET Core SDK by following the instructions on 
 the [.NET Core Getting Started](http://dotnet.github.io/getting-started/) page.
 If you need the most up to date (daily) version of this .NET Core installer you can get it from the
@@ -33,16 +33,16 @@ related to .NET Core including:
 
 ## What Can you Make from this Repository?
 
-.NET Core relies heavily on the [Nuget](https://en.wikipedia.org/wiki/NuGet) package manager
-which is system to package, distribute and version software components.  See [https://www.nuget.org/](https://www.nuget.org/) 
+.NET Core relies heavily on the [Nuget](https://en.wikipedia.org/wiki/NuGet) package manager,
+which is a system to package, distribute and version software components.  See [https://www.nuget.org/](https://www.nuget.org/) 
 for more information on Nuget.   For now it is enough to know Nuget is a system that
 bundles components into `*.nupkg` files (which are ZIP archives) and these packages can be 'published' 
 either through a local file system path or by a URL (e.g. https://www.nuget.org/).   There are then tools 
-(e.g. Nuget.exe, Visual Studio, dotnet.exe) that based on a configuration file (project.json) know 
+(e.g. Nuget.exe, Visual Studio, dotnet.exe) that based on a configuration file (.csproj) know 
 how to search these publishing locations and pull down consistent set of packages for the 
 application.   
 
-In a concrete terms, this repository is best thought of as the source code for the following Nuget package
+In concrete terms, this repository is best thought of as the source code for the following Nuget package
  
  * **Microsoft.NETCore.Runtime.CoreCLR** - Represents the object allocator, garbage collector (GC), class 
    loader, type system, interop and the most fundamental parts of the .NET class library (e.g. 
@@ -59,39 +59,39 @@ It also contains the source code for the following closely related support packa
  * **Microsoft.NETCore.TestHost** - This contains the corehost.exe program, which is a small wrapper 
    that uses the .NET Runtime to run IL DLLs passed to it on the command line.
  * **Microsoft.TargetingPack.Private.CoreCLR** - A set of assemblies that represent the compile time surface 
-   area of class library implemented by the runtime itself.
+   area of the class library implemented by the runtime itself.
 
 ## Relationship with the [CoreFX](https://github.com/dotnet/corefx) Repository 
 
-By itself, the Microsoft.NETCore.Runtime.CoreCLR package is actually not enough to do much.
+By itself, the `Microsoft.NETCore.Runtime.CoreCLR` package is actually not enough to do much.
 One reason for this is that the CoreCLR package tries to minimize the amount of the class library that it implements.
 Only types that have a strong dependency on the internal workings of the runtime are included (e.g, 
-System.Object, System.String System.Thread, System.Threading.Tasks.Task and most foundational interfaces).
+`System.Object`, `System.String`, `System.Thread`, `System.Threading.Tasks.Task` and most foundational interfaces).
 Instead most of the class library is implemented as independent Nuget packages that simply use the .NET Core 
-runtime as a dependency.    Many of the most familiar classes (System.Collections, System.IO, System.Xml and 
+runtime as a dependency.    Many of the most familiar classes (`System.Collections`, `System.IO`, `System.Xml` and 
 so on), live in packages defined in the [dotnet/corefx](https://github.com/dotnet/corefx) repository.
 
 But the main reason you can't do much with CoreCLR is that **ALL** of the types in the class library **LOOK** 
 like they are defined by the CoreFX framework and not CoreCLR.   Any library code defined here 
-lives in a single DLL called System.Private.CoreLib.dll and as its name suggests is private (hidden).
+lives in a single DLL called `System.Private.CoreLib.dll` and as its name suggests is private (hidden).
 Instead for any particular PUBLIC type defined in CoreCLR, we found the 'right' package in CoreFX where it naturally 
 belongs and use that package as its **public publishing** point.   That 'facade' package then forwards references 
-to the (private) implementation in System.Private.CoreLib.dll defined here.
-For example the *System.Runtime* package defined in CoreFX declares the PUBLIC name for types like 
-System.Object and System.String.   Thus from an applications point of view these types live in System.Runtime.dll. 
-However System.Runtime.dll (defined in the CoreFX repo) forwards references ultimately to System.Private.CoreLib.dll 
+to the (private) implementation in `System.Private.CoreLib.dll` defined here.
+For example the *`System.Runtime`* package defined in CoreFX declares the PUBLIC name for types like 
+`System.Object` and `System.String`.   Thus from an applications point of view these types live in `System.Runtime.dll`. 
+However, `System.Runtime.dll` (defined in the CoreFX repo) forwards references ultimately to `System.Private.CoreLib.dll` 
 which is defined here.
 
-Thus in order to run an application, you need BOTH the Microsoft.NETCore.Runtime.CoreCLR Nuget package 
-(defined in this repository) as well as  packages for whatever you actually references that were defined 
-in the CoreFX repository (which at a minimum includes the System.Runtime package).    You also need some 
+Thus in order to run an application, you need BOTH the `Microsoft.NETCore.Runtime.CoreCLR` Nuget package 
+(defined in this repository) as well as  packages for whatever you actually reference that were defined 
+in the CoreFX repository (which at a minimum includes the `System.Runtime` package).    You also need some 
 sort of 'host' executable that loads the CoreCLR package as well as the CoreFX packages and starts your code (typically 
-you use dotnet.exe for this).   
+you use `dotnet.exe` for this).   
 
 These extra pieces are not defined here, however you don't need to build them in order to use the CoreCLR 
 Nuget package you create here.   There are already versions of the CoreFX packages published on 
-https://www.nuget.org/ so you  can just have your test application's project.json specify the CoreCLR you 
-built it will naturally pull anything else it needs from the official location https://www.nuget.org/ to 
+https://www.nuget.org/ so you can have your test application's project.json specify the CoreCLR you 
+built and it will naturally pull anything else it needs from the official location https://www.nuget.org/ to 
 make a complete application.  More on this in the [Using Your Build](Documentation/workflow/UsingYourBuild.md) page.
 
 --------------------------
@@ -106,8 +106,8 @@ the procedure are equally applicable to this repository.
 --------------------------
 ## Building the Repository
 
-The build depends on GIT, CMAKE, Python and of course a C++ compiler.  Once these prerequisites are installed
-the build is simply a matter of invoking the 'Build' script (Build.cmd or build.sh) at the base of the 
+The build depends on Git, CMake, Python and of course a C++ compiler.  Once these prerequisites are installed
+the build is simply a matter of invoking the 'build' script (`build.cmd` or `build.sh`) at the base of the 
 repository.  
 
 The details of installing the components differ depending on the operating system.  See the following
@@ -128,11 +128,11 @@ The build has two main 'buildTypes'
    can be difficult to debug.   Passing 'release' to the build script select this.  
 
 In addition, by default the build will not only create the runtime executables, but it will also 
-build all the tests.   There are quit a few tests so this does take a significant amount of time
-that is not necessary if you are just want to experiment with changes.   You can submit the building
+build all the tests.   There are quite a few tests so this does take a significant amount of time
+that is not necessary if you want to experiment with changes.   You can submit the building
 of the tests with the 'skiptests' argument to the build script.
 
-Thus to get a build as quickly as possible type the following (using \ as the directory separator, use / on Unix machines)
+Thus to get a build as quickly as possible type the following (using `\` as the directory separator, use `/` on Unix machines)
 ```bat
     .\build skiptests 
 ```
@@ -144,8 +144,8 @@ to build the release (full speed) flavor.  You can find more build options with 
 
 ## Using Your Build
 
-The build places all of its generated files under the 'bin' directory at the base of the repository.   There 
-is a 'bin\Log' directory that contains log files generated during the build (Most useful when the build fails).
+The build places all of its generated files under the `bin` directory at the base of the repository.   There 
+is a `bin\Log` directory that contains log files generated during the build (Most useful when the build fails).
 The the actual output is placed in a directory like this 
 
 * bin\Product\Windows_NT.x64.Release
@@ -156,7 +156,7 @@ that were built, which are placed in the directory
 
 * bin\Product\Windows_NT.x64.Release\.nuget\pkg
 
-directory.   These packages are the 'output' of your build.   
+These packages are the 'output' of your build.   
 
 There are two basic techniques for using your new runtime.
 
@@ -189,7 +189,7 @@ time to runt tests.  See [Running .NET Core Tests](Documentation/workflow/Runnin
 ## Contributing to Repository 
 
 Looking for something to work on? The list 
-of [up-for-grabs issues](https://github.com/dotnet/coreclr/issues?q=is%3Aopen+is%3Aissue+label%3Aup-for-grabs) is a great place to start.
+of [up-for-grabs issues](https://github.com/dotnet/coreclr/labels/up-for-grabs) is a great place to start.
 
 Please read the following documents to get started.
 

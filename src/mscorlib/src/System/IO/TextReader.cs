@@ -14,12 +14,9 @@
 **
 ===========================================================*/
 
-using System;
 using System.Text;
 using System.Runtime.InteropServices;
 using System.Runtime.CompilerServices;
-using System.Reflection;
-using System.Security.Permissions;
 using System.Diagnostics.CodeAnalysis;
 using System.Diagnostics.Contracts;
 using System.Threading;
@@ -34,8 +31,7 @@ namespace System.IO {
     // This class is intended for character input, not bytes.  
     // There are methods on the Stream class for reading bytes. 
     [Serializable]
-    [ComVisible(true)]
-    public abstract class TextReader : MarshalByRefObject, IDisposable {
+    internal abstract class TextReader : MarshalByRefObject, IDisposable {
 
         public static readonly TextReader Null = new NullTextReader();
     
@@ -97,13 +93,13 @@ namespace System.IO {
         public virtual int Read([In, Out] char[] buffer, int index, int count) 
         {
             if (buffer==null)
-                throw new ArgumentNullException(nameof(buffer), Environment.GetResourceString("ArgumentNull_Buffer"));
+                throw new ArgumentNullException(nameof(buffer), SR.ArgumentNull_Buffer);
             if (index < 0)
-                throw new ArgumentOutOfRangeException(nameof(index), Environment.GetResourceString("ArgumentOutOfRange_NeedNonNegNum"));
+                throw new ArgumentOutOfRangeException(nameof(index), SR.ArgumentOutOfRange_NeedNonNegNum);
             if (count < 0)
-                throw new ArgumentOutOfRangeException(nameof(count), Environment.GetResourceString("ArgumentOutOfRange_NeedNonNegNum"));
+                throw new ArgumentOutOfRangeException(nameof(count), SR.ArgumentOutOfRange_NeedNonNegNum);
             if (buffer.Length - index < count)
-                throw new ArgumentException(Environment.GetResourceString("Argument_InvalidOffLen"));
+                throw new ArgumentException(SR.Argument_InvalidOffLen);
             Contract.Ensures(Contract.Result<int>() >= 0);
             Contract.Ensures(Contract.Result<int>() <= Contract.OldValue(count));
             Contract.EndContractBlock();
@@ -172,8 +168,6 @@ namespace System.IO {
         }
 
         #region Task based Async APIs
-        [HostProtection(ExternalThreading=true)]
-        [ComVisible(false)]
         public virtual Task<String> ReadLineAsync()
         {
             return Task<String>.Factory.StartNew(state =>
@@ -183,8 +177,6 @@ namespace System.IO {
             this, CancellationToken.None, TaskCreationOptions.DenyChildAttach, TaskScheduler.Default);
         }
 
-        [HostProtection(ExternalThreading=true)]
-        [ComVisible(false)]
         public async virtual Task<String> ReadToEndAsync()
         {
             char[] chars = new char[4096];
@@ -197,16 +189,14 @@ namespace System.IO {
             return sb.ToString();
         }
 
-        [HostProtection(ExternalThreading=true)]
-        [ComVisible(false)]
         public virtual Task<int> ReadAsync(char[] buffer, int index, int count)
         {
             if (buffer==null)
-                throw new ArgumentNullException(nameof(buffer), Environment.GetResourceString("ArgumentNull_Buffer"));
+                throw new ArgumentNullException(nameof(buffer), SR.ArgumentNull_Buffer);
             if (index < 0 || count < 0)
-                throw new ArgumentOutOfRangeException((index < 0 ? nameof(index) : nameof(count)), Environment.GetResourceString("ArgumentOutOfRange_NeedNonNegNum"));
+                throw new ArgumentOutOfRangeException((index < 0 ? nameof(index) : nameof(count)), SR.ArgumentOutOfRange_NeedNonNegNum);
             if (buffer.Length - index < count)
-                throw new ArgumentException(Environment.GetResourceString("Argument_InvalidOffLen"));
+                throw new ArgumentException(SR.Argument_InvalidOffLen);
             Contract.EndContractBlock();
 
             return ReadAsyncInternal(buffer, index, count);
@@ -228,23 +218,20 @@ namespace System.IO {
             tuple, CancellationToken.None, TaskCreationOptions.DenyChildAttach, TaskScheduler.Default);
         }
 
-        [HostProtection(ExternalThreading=true)]
-        [ComVisible(false)]
         public virtual Task<int> ReadBlockAsync(char[] buffer, int index, int count)
         {
             if (buffer==null)
-                throw new ArgumentNullException(nameof(buffer), Environment.GetResourceString("ArgumentNull_Buffer"));
+                throw new ArgumentNullException(nameof(buffer), SR.ArgumentNull_Buffer);
             if (index < 0 || count < 0)
-                throw new ArgumentOutOfRangeException((index < 0 ? nameof(index) : nameof(count)), Environment.GetResourceString("ArgumentOutOfRange_NeedNonNegNum"));
+                throw new ArgumentOutOfRangeException((index < 0 ? nameof(index) : nameof(count)), SR.ArgumentOutOfRange_NeedNonNegNum);
             if (buffer.Length - index < count)
-                throw new ArgumentException(Environment.GetResourceString("Argument_InvalidOffLen"));
+                throw new ArgumentException(SR.Argument_InvalidOffLen);
 
             Contract.EndContractBlock();
 
             return ReadBlockAsyncInternal(buffer, index, count);
          }
 
-        [HostProtection(ExternalThreading=true)]
         private async Task<int> ReadBlockAsyncInternal(char[] buffer, int index, int count)
         {
             Contract.Requires(buffer != null);
@@ -263,7 +250,6 @@ namespace System.IO {
         }
         #endregion
 
-        [HostProtection(Synchronization=true)]
         public static TextReader Synchronized(TextReader reader) 
         {
             if (reader==null)
@@ -360,46 +346,42 @@ namespace System.IO {
             // On SyncTextReader all APIs should run synchronously, even the async ones.
             //
 
-            [ComVisible(false)]
             [MethodImplAttribute(MethodImplOptions.Synchronized)]
             public override Task<String> ReadLineAsync()
             {
                 return Task.FromResult(ReadLine());
             }
 
-            [ComVisible(false)]
             [MethodImplAttribute(MethodImplOptions.Synchronized)]
             public override Task<String> ReadToEndAsync()
             {
                 return Task.FromResult(ReadToEnd());
             }
 
-            [ComVisible(false)]
             [MethodImplAttribute(MethodImplOptions.Synchronized)]
             public override Task<int> ReadBlockAsync(char[] buffer, int index, int count)
             {
                 if (buffer==null)
-                    throw new ArgumentNullException(nameof(buffer), Environment.GetResourceString("ArgumentNull_Buffer"));
+                    throw new ArgumentNullException(nameof(buffer), SR.ArgumentNull_Buffer);
                 if (index < 0 || count < 0)
-                    throw new ArgumentOutOfRangeException((index < 0 ? nameof(index) : nameof(count)), Environment.GetResourceString("ArgumentOutOfRange_NeedNonNegNum"));
+                    throw new ArgumentOutOfRangeException((index < 0 ? nameof(index) : nameof(count)), SR.ArgumentOutOfRange_NeedNonNegNum);
                 if (buffer.Length - index < count)
-                    throw new ArgumentException(Environment.GetResourceString("Argument_InvalidOffLen"));
+                    throw new ArgumentException(SR.Argument_InvalidOffLen);
 
                 Contract.EndContractBlock();
 
                 return Task.FromResult(ReadBlock(buffer, index, count));
             }
 
-            [ComVisible(false)]
             [MethodImplAttribute(MethodImplOptions.Synchronized)]
             public override Task<int> ReadAsync(char[] buffer, int index, int count)
             {
                 if (buffer==null)
-                    throw new ArgumentNullException(nameof(buffer), Environment.GetResourceString("ArgumentNull_Buffer"));
+                    throw new ArgumentNullException(nameof(buffer), SR.ArgumentNull_Buffer);
                 if (index < 0 || count < 0)
-                    throw new ArgumentOutOfRangeException((index < 0 ? nameof(index) : nameof(count)), Environment.GetResourceString("ArgumentOutOfRange_NeedNonNegNum"));
+                    throw new ArgumentOutOfRangeException((index < 0 ? nameof(index) : nameof(count)), SR.ArgumentOutOfRange_NeedNonNegNum);
                 if (buffer.Length - index < count)
-                    throw new ArgumentException(Environment.GetResourceString("Argument_InvalidOffLen"));
+                    throw new ArgumentException(SR.Argument_InvalidOffLen);
                 Contract.EndContractBlock();
 
                 return Task.FromResult(Read(buffer, index, count));

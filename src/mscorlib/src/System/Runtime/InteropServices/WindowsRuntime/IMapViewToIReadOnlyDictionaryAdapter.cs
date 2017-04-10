@@ -28,11 +28,10 @@ namespace System.Runtime.InteropServices.WindowsRuntime
     {
         private IMapViewToIReadOnlyDictionaryAdapter()
         {
-            Contract.Assert(false, "This class is never instantiated");
+            Debug.Assert(false, "This class is never instantiated");
         }
 
         // V this[K key] { get }
-        [SecurityCritical]
         internal V Indexer_Get<K, V>(K key)
         {
             if (key == null)
@@ -44,7 +43,6 @@ namespace System.Runtime.InteropServices.WindowsRuntime
         }
 
         // IEnumerable<K> Keys { get }
-        [SecurityCritical]
         internal IEnumerable<K> Keys<K, V>()
         {
             IMapView<K, V> _this = JitHelpers.UnsafeCast<IMapView<K, V>>(this);
@@ -53,7 +51,6 @@ namespace System.Runtime.InteropServices.WindowsRuntime
         }
 
         // IEnumerable<V> Values { get }
-        [SecurityCritical]
         internal IEnumerable<V> Values<K, V>()
         {
             IMapView<K, V> _this = JitHelpers.UnsafeCast<IMapView<K, V>>(this);
@@ -63,7 +60,6 @@ namespace System.Runtime.InteropServices.WindowsRuntime
 
         // bool ContainsKey(K key)
         [Pure]
-        [SecurityCritical]
         internal bool ContainsKey<K, V>(K key)
         {
             if (key == null)
@@ -74,7 +70,6 @@ namespace System.Runtime.InteropServices.WindowsRuntime
         }
 
         // bool TryGetValue(TKey key, out TValue value)
-        [SecurityCritical]
         internal bool TryGetValue<K, V>(K key, out V value)
         {
             if (key == null)
@@ -119,7 +114,7 @@ namespace System.Runtime.InteropServices.WindowsRuntime
             catch (Exception ex)
             {
                 if (__HResults.E_BOUNDS == ex._HResult)
-                    throw new KeyNotFoundException(Environment.GetResourceString("Arg_KeyNotFound"));
+                    throw new KeyNotFoundException(SR.Arg_KeyNotFound);
                 throw;
             }
         }
@@ -150,9 +145,9 @@ namespace System.Runtime.InteropServices.WindowsRuntime
             if (index < 0)
                 throw new ArgumentOutOfRangeException(nameof(index));
             if (array.Length <= index && this.Count > 0)
-                throw new ArgumentException(Environment.GetResourceString("Arg_IndexOutOfRangeException"));
+                throw new ArgumentException(SR.Arg_IndexOutOfRangeException);
             if (array.Length - index < dictionary.Count)
-                throw new ArgumentException(Environment.GetResourceString("Argument_InsufficientSpaceToCopyCollection"));
+                throw new ArgumentException(SR.Argument_InsufficientSpaceToCopyCollection);
 
             int i = index;
             foreach (KeyValuePair<TKey, TValue> mapping in dictionary)
@@ -195,7 +190,7 @@ namespace System.Runtime.InteropServices.WindowsRuntime
                 throw new ArgumentNullException(nameof(dictionary));
 
             this.dictionary = dictionary;
-            this.enumeration = dictionary.GetEnumerator();
+            enumeration = dictionary.GetEnumerator();
         }
 
         void IDisposable.Dispose()
@@ -208,11 +203,13 @@ namespace System.Runtime.InteropServices.WindowsRuntime
             return enumeration.MoveNext();
         }
 
-        Object IEnumerator.Current {
+        Object IEnumerator.Current
+        {
             get { return ((IEnumerator<TKey>)this).Current; }
         }
 
-        public TKey Current {
+        public TKey Current
+        {
             get { return enumeration.Current.Key; }
         }
 
@@ -245,9 +242,9 @@ namespace System.Runtime.InteropServices.WindowsRuntime
             if (index < 0)
                 throw new ArgumentOutOfRangeException(nameof(index));
             if (array.Length <= index && this.Count > 0)
-                throw new ArgumentException(Environment.GetResourceString("Arg_IndexOutOfRangeException"));
+                throw new ArgumentException(SR.Arg_IndexOutOfRangeException);
             if (array.Length - index < dictionary.Count)
-                throw new ArgumentException(Environment.GetResourceString("Argument_InsufficientSpaceToCopyCollection"));
+                throw new ArgumentException(SR.Argument_InsufficientSpaceToCopyCollection);
 
             int i = index;
             foreach (KeyValuePair<TKey, TValue> mapping in dictionary)
@@ -294,7 +291,7 @@ namespace System.Runtime.InteropServices.WindowsRuntime
                 throw new ArgumentNullException(nameof(dictionary));
 
             this.dictionary = dictionary;
-            this.enumeration = dictionary.GetEnumerator();
+            enumeration = dictionary.GetEnumerator();
         }
 
         void IDisposable.Dispose()
@@ -307,11 +304,13 @@ namespace System.Runtime.InteropServices.WindowsRuntime
             return enumeration.MoveNext();
         }
 
-        Object IEnumerator.Current {
+        Object IEnumerator.Current
+        {
             get { return ((IEnumerator<TValue>)this).Current; }
         }
 
-        public TValue Current {
+        public TValue Current
+        {
             get { return enumeration.Current.Value; }
         }
 
@@ -320,5 +319,4 @@ namespace System.Runtime.InteropServices.WindowsRuntime
             enumeration = dictionary.GetEnumerator();
         }
     }  // class ReadOnlyDictionaryValueEnumerator<TKey, TValue>
-
 }

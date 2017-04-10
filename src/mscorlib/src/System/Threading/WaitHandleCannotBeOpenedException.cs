@@ -3,32 +3,34 @@
 // See the LICENSE file in the project root for more information.
 
 //
-namespace System.Threading 
-{
-    using System;
-    using System.Runtime.Serialization;
-    using System.Runtime.InteropServices;
 
+using System;
+using System.Runtime.Serialization;
+using System.Runtime.InteropServices;
+
+namespace System.Threading
+{
     [Serializable]
     [ComVisibleAttribute(false)]
 
-    public class WaitHandleCannotBeOpenedException : ApplicationException { 
-        public WaitHandleCannotBeOpenedException() : base(Environment.GetResourceString("Threading.WaitHandleCannotBeOpenedException")) 
+    public class WaitHandleCannotBeOpenedException : ApplicationException
+    {
+        public WaitHandleCannotBeOpenedException() : base(SR.Threading_WaitHandleCannotBeOpenedException)
         {
-            SetErrorCode(__HResults.COR_E_WAITHANDLECANNOTBEOPENED);
+            HResult = __HResults.COR_E_WAITHANDLECANNOTBEOPENED;
         }
-    
+
         public WaitHandleCannotBeOpenedException(String message) : base(message)
         {
-            SetErrorCode(__HResults.COR_E_WAITHANDLECANNOTBEOPENED);
+            HResult = __HResults.COR_E_WAITHANDLECANNOTBEOPENED;
         }
 
         public WaitHandleCannotBeOpenedException(String message, Exception innerException) : base(message, innerException)
         {
-            SetErrorCode(__HResults.COR_E_WAITHANDLECANNOTBEOPENED);
+            HResult = __HResults.COR_E_WAITHANDLECANNOTBEOPENED;
         }
 
-        protected WaitHandleCannotBeOpenedException(SerializationInfo info, StreamingContext context) : base (info, context) 
+        protected WaitHandleCannotBeOpenedException(SerializationInfo info, StreamingContext context) : base(info, context)
         {
         }
     }

@@ -4,6 +4,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Diagnostics.Contracts;
 using System.Security;
 
@@ -40,13 +41,12 @@ namespace System.Threading
     //
     public sealed class AsyncLocal<T> : IAsyncLocal
     {
-        [SecurityCritical] // critical because this action will terminate the process if it throws.
         private readonly Action<AsyncLocalValueChangedArgs<T>> m_valueChangedHandler;
 
         //
         // Constructs an AsyncLocal<T> that does not receive change notifications.
         //
-        public AsyncLocal() 
+        public AsyncLocal()
         {
         }
 
@@ -54,31 +54,27 @@ namespace System.Threading
         // Constructs an AsyncLocal<T> with a delegate that is called whenever the current value changes
         // on any thread.
         //
-        [SecurityCritical]
-        public AsyncLocal(Action<AsyncLocalValueChangedArgs<T>> valueChangedHandler) 
+        public AsyncLocal(Action<AsyncLocalValueChangedArgs<T>> valueChangedHandler)
         {
             m_valueChangedHandler = valueChangedHandler;
         }
 
         public T Value
         {
-            [SecuritySafeCritical]
-            get 
-            { 
+            get
+            {
                 object obj = ExecutionContext.GetLocalValue(this);
                 return (obj == null) ? default(T) : (T)obj;
             }
-            [SecuritySafeCritical]
-            set 
+            set
             {
-                ExecutionContext.SetLocalValue(this, value, m_valueChangedHandler != null); 
+                ExecutionContext.SetLocalValue(this, value, m_valueChangedHandler != null);
             }
         }
 
-        [SecurityCritical]
         void IAsyncLocal.OnValueChanged(object previousValueObj, object currentValueObj, bool contextChanged)
         {
-            Contract.Assert(m_valueChangedHandler != null);
+            Debug.Assert(m_valueChangedHandler != null);
             T previousValue = previousValueObj == null ? default(T) : (T)previousValueObj;
             T currentValue = currentValueObj == null ? default(T) : (T)currentValueObj;
             m_valueChangedHandler(new AsyncLocalValueChangedArgs<T>(previousValue, currentValue, contextChanged));
@@ -90,7 +86,6 @@ namespace System.Threading
     //
     internal interface IAsyncLocal
     {
-        [SecurityCritical]
         void OnValueChanged(object previousValue, object currentValue, bool contextChanged);
     }
 
@@ -98,7 +93,7 @@ namespace System.Threading
     {
         public T PreviousValue { get; private set; }
         public T CurrentValue { get; private set; }
-        
+
         //
         // If the value changed because we changed to a different ExecutionContext, this is true.  If it changed
         // because someone set the Value property, this is false.
@@ -119,7 +114,7 @@ namespace System.Threading
     // Implementations are specialized based on the number of elements in the immutable
     // map in order to minimize memory consumption and look-up times.
     //
-    interface IAsyncLocalValueMap
+    internal interface IAsyncLocalValueMap
     {
         bool TryGetValue(IAsyncLocal key, out object value);
         IAsyncLocalValueMap Set(IAsyncLocal key, object value);
@@ -131,8 +126,6 @@ namespace System.Threading
     internal static class AsyncLocalValueMap
     {
         public static IAsyncLocalValueMap Empty { get; } = new EmptyAsyncLocalValueMap();
-
-        public static IAsyncLocalValueMap Create(IAsyncLocal key, object value) => new OneElementAsyncLocalValueMap(key, value);
 
         // Instance without any key/value pairs.  Used as a singleton/
         private sealed class EmptyAsyncLocalValueMap : IAsyncLocalValueMap
@@ -467,7 +460,7 @@ namespace System.Threading
                                 multi.UnsafeStore(index++, pair.Key, pair.Value);
                             }
                         }
-                        Contract.Assert(index == MultiElementAsyncLocalValueMap.MaxMultiElements);
+                        Debug.Assert(index == MultiElementAsyncLocalValueMap.MaxMultiElements);
                         return multi;
                     }
                     else
@@ -480,7 +473,7 @@ namespace System.Threading
                                 map[pair.Key] = pair.Value;
                             }
                         }
-                        Contract.Assert(map.Count == count - 1);
+                        Debug.Assert(map.Count == count - 1);
                         return map;
                     }
                 }

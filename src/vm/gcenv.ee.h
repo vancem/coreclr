@@ -41,6 +41,14 @@ public:
     void DiagWalkSurvivors(void* gcContext);
     void DiagWalkLOHSurvivors(void* gcContext);
     void DiagWalkBGCSurvivors(void* gcContext);
+    void StompWriteBarrier(WriteBarrierParameters* args);
+
+    void EnableFinalization(bool foundFinalizers);
+    void HandleFatalError(unsigned int exitCode);
+    bool ShouldFinalizeObjectForUnload(AppDomain* pDomain, Object* obj);
+    bool ForceFullGCToBeBlocking();
+    bool EagerFinalized(Object* obj);
+    MethodTable* GetFreeObjectMethodTable();
 };
 
 #endif // FEATURE_STANDALONE_GC

@@ -124,6 +124,7 @@ CoreMangLib/cti/system/double/DoubleToString3/DoubleToString3.sh
 CoreMangLib/cti/system/double/DoubleToString4/DoubleToString4.sh
 CoreMangLib/cti/system/int/Int32ToString3/Int32ToString3.sh
 CoreMangLib/cti/system/int64/Int64ToString3/Int64ToString3.sh
+CoreMangLib/cti/system/reflection/emit/DynMethodJumpStubTests/DynMethodJumpStubTests/DynMethodJumpStubTests.sh
 CoreMangLib/cti/system/string/StringCompare1/StringCompare1.sh
 CoreMangLib/cti/system/string/StringCompare15/StringCompare15.sh
 CoreMangLib/cti/system/string/StringCompare2/StringCompare2.sh
@@ -147,6 +148,7 @@ JIT/Directed/intrinsic/interlocked/rva_rvastatic3/rva_rvastatic3.sh
 JIT/Directed/intrinsic/interlocked/rva_rvastatic4/rva_rvastatic4.sh
 JIT/Directed/pinvoke/calli_excep/calli_excep.sh
 JIT/Directed/pinvoke/jump/jump.sh
+JIT/Directed/pinvoke/pinvoke-bug/pinvoke-bug.sh
 JIT/Directed/pinvoke/sin/sin.sh
 JIT/Directed/pinvoke/sysinfo_cs/sysinfo_cs.sh
 JIT/Directed/pinvoke/sysinfo_il/sysinfo_il.sh

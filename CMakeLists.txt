@@ -11,6 +11,9 @@ project(CoreCLR)
 # Include cmake functions
 include(functions.cmake)
 
+# Include global configure settings
+include(configure.cmake)
+
 if (WIN32)
   message(STATUS "VS_PLATFORM_TOOLSET is ${CMAKE_VS_PLATFORM_TOOLSET}")
   message(STATUS "VS_PLATFORM_NAME is ${CMAKE_VS_PLATFORM_NAME}")
@@ -101,8 +104,8 @@ else (WIN32)
     else (CMAKE_SYSTEM_NAME STREQUAL Darwin)
 
       # Ensure that objcopy is present
-      if (DEFINED ENV{CROSSCOMPILE})
-        if (CMAKE_SYSTEM_PROCESSOR STREQUAL armv7l OR CMAKE_SYSTEM_PROCESSOR STREQUAL aarch64)
+      if (CLR_UNIX_CROSS_BUILD AND NOT DEFINED CLR_CROSS_COMPONENTS_BUILD)
+        if (CMAKE_SYSTEM_PROCESSOR STREQUAL armv7l OR CMAKE_SYSTEM_PROCESSOR STREQUAL aarch64 OR CMAKE_SYSTEM_PROCESSOR STREQUAL arm)
           find_program(OBJCOPY ${TOOLCHAIN}-objcopy)
         elseif(CMAKE_SYSTEM_PROCESSOR STREQUAL i686)
           find_program(OBJCOPY objcopy)
@@ -122,37 +125,51 @@ endif(WIN32)
 
 #----------------------------------------
 # Detect and set platform variable names
-#     - for non-windows build platform & architecture is detected using inbuilt CMAKE variables
+#     - for non-windows build platform & architecture is detected using inbuilt CMAKE variables and cross target component configure
 #     - for windows we use the passed in parameter to CMAKE to determine build arch
 #----------------------------------------
 if(CMAKE_SYSTEM_NAME STREQUAL Linux)
     set(CLR_CMAKE_PLATFORM_UNIX 1)
-    # CMAKE_SYSTEM_PROCESSOR returns the value of `uname -p`.
-    # For the AMD/Intel 64bit architecure two different strings are common.
-    # Linux and Darwin identify it as "x86_64" while FreeBSD and netbsd uses the
-    # "amd64" string. Accept either of the two here.
-    if(CMAKE_SYSTEM_PROCESSOR STREQUAL x86_64 OR CMAKE_SYSTEM_PROCESSOR STREQUAL amd64)
-        set(CLR_CMAKE_PLATFORM_UNIX_AMD64 1)
-    elseif(CMAKE_SYSTEM_PROCESSOR STREQUAL armv7l)
-        set(CLR_CMAKE_PLATFORM_UNIX_ARM 1)
-    elseif(CMAKE_SYSTEM_PROCESSOR STREQUAL aarch64)
-        set(CLR_CMAKE_PLATFORM_UNIX_ARM64 1)
-    elseif(CMAKE_SYSTEM_PROCESSOR STREQUAL i686)
-        set(CLR_CMAKE_PLATFORM_UNIX_X86 1)
+    if(CLR_CROSS_COMPONENTS_BUILD)
+        # CMAKE_HOST_SYSTEM_PROCESSOR returns the value of `uname -p` on host.
+        if(CMAKE_HOST_SYSTEM_PROCESSOR STREQUAL x86_64 OR CMAKE_HOST_SYSTEM_PROCESSOR STREQUAL amd64)
+            if(CLR_CMAKE_TARGET_ARCH STREQUAL "arm")
+                set(CLR_CMAKE_PLATFORM_UNIX_X86 1)
+            else()
+                set(CLR_CMAKE_PLATFORM_UNIX_AMD64 1)
+            endif()
+        elseif(CMAKE_HOST_SYSTEM_PROCESSOR STREQUAL i686)
+            set(CLR_CMAKE_PLATFORM_UNIX_X86 1)
+        else()
+            clr_unknown_arch()
+        endif()
     else()
-        clr_unknown_arch()
+        # CMAKE_SYSTEM_PROCESSOR returns the value of `uname -p` on target.
+        # For the AMD/Intel 64bit architecure two different strings are common.
+        # Linux and Darwin identify it as "x86_64" while FreeBSD and netbsd uses the
+        # "amd64" string. Accept either of the two here.
+        if(CMAKE_SYSTEM_PROCESSOR STREQUAL x86_64 OR CMAKE_SYSTEM_PROCESSOR STREQUAL amd64)
+            set(CLR_CMAKE_PLATFORM_UNIX_AMD64 1)
+        elseif(CMAKE_SYSTEM_PROCESSOR STREQUAL armv7l)
+            set(CLR_CMAKE_PLATFORM_UNIX_ARM 1)
+        elseif(CMAKE_SYSTEM_PROCESSOR STREQUAL arm)
+            set(CLR_CMAKE_PLATFORM_UNIX_ARM 1)
+        elseif(CMAKE_SYSTEM_PROCESSOR STREQUAL aarch64)
+            set(CLR_CMAKE_PLATFORM_UNIX_ARM64 1)
+        elseif(CMAKE_SYSTEM_PROCESSOR STREQUAL i686)
+            set(CLR_CMAKE_PLATFORM_UNIX_X86 1)
+        else()
+            clr_unknown_arch()
+        endif()
     endif()
     set(CLR_CMAKE_PLATFORM_LINUX 1)
 
-    # Detect Alpine Linux
-    SET(OS_RELEASE_FILENAME "/etc/os-release")
-    if (EXISTS ${OS_RELEASE_FILENAME})
-        file(READ ${OS_RELEASE_FILENAME} OS_RELEASE)
-        string(FIND "${OS_RELEASE}" "ID=alpine" CLR_CMAKE_PLATFORM_ALPINE_LINUX)
-        if(CLR_CMAKE_PLATFORM_ALPINE_LINUX EQUAL -1)
-            unset(CLR_CMAKE_PLATFORM_ALPINE_LINUX)
-        endif(CLR_CMAKE_PLATFORM_ALPINE_LINUX EQUAL -1)
-    endif(EXISTS ${OS_RELEASE_FILENAME})
+    # Detect Linux ID
+    if(DEFINED CLR_CMAKE_LINUX_ID)
+        if(CLR_CMAKE_LINUX_ID STREQUAL alpine)
+            set(CLR_CMAKE_PLATFORM_ALPINE_LINUX 1)
+        endif()
+    endif(DEFINED CLR_CMAKE_LINUX_ID)
 endif(CMAKE_SYSTEM_NAME STREQUAL Linux)
 
 if(CMAKE_SYSTEM_NAME STREQUAL Darwin)
@@ -211,30 +228,30 @@ endif(CMAKE_SYSTEM_NAME STREQUAL SunOS)
 #-------------------------------------------------------------
 # Set HOST architecture variables
 if(CLR_CMAKE_PLATFORM_UNIX_ARM)
-  set(CLR_CMAKE_PLATFORM_ARCH_ARM 1)
-  set(CLR_CMAKE_HOST_ARCH "arm")
-elseif(CLR_CMAKE_PLATFORM_UNIX_ARM64)
-  set(CLR_CMAKE_PLATFORM_ARCH_ARM64 1) 
-  set(CLR_CMAKE_HOST_ARCH "arm64")
-elseif(CLR_CMAKE_PLATFORM_UNIX_AMD64)
-  set(CLR_CMAKE_PLATFORM_ARCH_AMD64 1)
-  set(CLR_CMAKE_HOST_ARCH "x64")
-elseif(CLR_CMAKE_PLATFORM_UNIX_X86)
-  set(CLR_CMAKE_PLATFORM_ARCH_I386 1)
-  set(CLR_CMAKE_HOST_ARCH "x86")
-elseif(WIN32)
-  # CLR_CMAKE_HOST_ARCH is passed in as param to cmake
-  if (CLR_CMAKE_HOST_ARCH STREQUAL x64)
-    set(CLR_CMAKE_PLATFORM_ARCH_AMD64 1)
-  elseif(CLR_CMAKE_HOST_ARCH STREQUAL x86)
-    set(CLR_CMAKE_PLATFORM_ARCH_I386 1)
-  elseif(CLR_CMAKE_HOST_ARCH STREQUAL arm)
     set(CLR_CMAKE_PLATFORM_ARCH_ARM 1)
-  elseif(CLR_CMAKE_HOST_ARCH STREQUAL arm64)
+    set(CLR_CMAKE_HOST_ARCH "arm")
+elseif(CLR_CMAKE_PLATFORM_UNIX_ARM64)
     set(CLR_CMAKE_PLATFORM_ARCH_ARM64 1)
-  else()
-    clr_unknown_arch()
-  endif()
+    set(CLR_CMAKE_HOST_ARCH "arm64")
+elseif(CLR_CMAKE_PLATFORM_UNIX_AMD64)
+    set(CLR_CMAKE_PLATFORM_ARCH_AMD64 1)
+    set(CLR_CMAKE_HOST_ARCH "x64")
+elseif(CLR_CMAKE_PLATFORM_UNIX_X86)
+    set(CLR_CMAKE_PLATFORM_ARCH_I386 1)
+    set(CLR_CMAKE_HOST_ARCH "x86")
+elseif(WIN32)
+    # CLR_CMAKE_HOST_ARCH is passed in as param to cmake
+    if (CLR_CMAKE_HOST_ARCH STREQUAL x64)
+        set(CLR_CMAKE_PLATFORM_ARCH_AMD64 1)
+    elseif(CLR_CMAKE_HOST_ARCH STREQUAL x86)
+        set(CLR_CMAKE_PLATFORM_ARCH_I386 1)
+    elseif(CLR_CMAKE_HOST_ARCH STREQUAL arm)
+        set(CLR_CMAKE_PLATFORM_ARCH_ARM 1)
+    elseif(CLR_CMAKE_HOST_ARCH STREQUAL arm64)
+        set(CLR_CMAKE_PLATFORM_ARCH_ARM64 1)
+    else()
+        clr_unknown_arch()
+    endif()
 endif()
 
 # Set TARGET architecture variables
@@ -259,9 +276,9 @@ endif()
 
 # check if host & target arch combination are valid
 if(NOT(CLR_CMAKE_TARGET_ARCH STREQUAL CLR_CMAKE_HOST_ARCH))
-  if(NOT((CLR_CMAKE_PLATFORM_ARCH_AMD64 AND CLR_CMAKE_TARGET_ARCH_ARM64) OR (CLR_CMAKE_PLATFORM_ARCH_I386 AND CLR_CMAKE_TARGET_ARCH_ARM)))
-    message(FATAL_ERROR "Invalid host and target arch combination")
-  endif()
+    if(NOT((CLR_CMAKE_PLATFORM_ARCH_AMD64 AND CLR_CMAKE_TARGET_ARCH_ARM64) OR (CLR_CMAKE_PLATFORM_ARCH_I386 AND CLR_CMAKE_TARGET_ARCH_ARM)))
+        message(FATAL_ERROR "Invalid host and target arch combination")
+    endif()
 endif()
 
 #-----------------------------------------------------
@@ -277,7 +294,6 @@ set(CMAKE_CXX_FLAGS_CHECKED ${CLR_CXX_FLAGS_CHECKED_INIT} CACHE STRING "Flags us
 set(CMAKE_EXE_LINKER_FLAGS_CHECKED "")
 set(CMAKE_SHARED_LINKER_FLAGS_CHECKED "")
 
-# Disable the following line for UNIX altjit on Windows
 set(CMAKE_CXX_STANDARD_LIBRARIES "") # do not link against standard win32 libs i.e. kernel32, uuid, user32, etc.
 
 if (WIN32)
@@ -298,12 +314,14 @@ if (WIN32)
 
   # Linker flags
   #
-  # Disable the following line for UNIX altjit on Windows
   set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} /MANIFEST:NO") #Do not create Side-by-Side Assembly Manifest
-  if (CLR_CMAKE_HOST_ARCH STREQUAL arm)
-    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} /SUBSYSTEM:WINDOWS,6.02") #windows subsystem - arm minimum is 6.02
+
+  if (CLR_CMAKE_PLATFORM_ARCH_ARM)
+    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} /SUBSYSTEM:WINDOWS,6.02") #windows subsystem - arm minimum is 6.02  
+  elseif(CLR_CMAKE_PLATFORM_ARCH_ARM64)
+    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} /SUBSYSTEM:WINDOWS,6.03") #windows subsystem - arm64 minimum is 6.03  
   else ()
-    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} /SUBSYSTEM:WINDOWS,6.00") #windows subsystem
+    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} /SUBSYSTEM:WINDOWS,6.01") #windows subsystem
   endif ()
     
   set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} /LARGEADDRESSAWARE") # can handle addresses larger than 2 gigabytes
@@ -501,9 +519,6 @@ else ()
     clr_unknown_arch()
 endif ()
 
-# Enable for UNIX altjit on Windows - set(CLR_CMAKE_PLATFORM_UNIX_AMD64 1)
-# Enable for UNIX altjit on Windows - add_definitions(-DCLR_CMAKE_PLATFORM_UNIX=1)
-
 #--------------------------------------
 # Compile Options
 #--------------------------------------
@@ -526,17 +541,15 @@ include(pgosupport.cmake)
 #     - project which require platform header not clr's
 #     - do not depend on clr's compile definitions
 #-----------------------------------------
-if(CLR_CMAKE_PLATFORM_UNIX)
-  add_subdirectory(src/corefx)
-endif(CLR_CMAKE_PLATFORM_UNIX)
+if(CLR_CMAKE_PLATFORM_UNIX AND NOT DEFINED CLR_CROSS_COMPONENTS_BUILD)
+    add_subdirectory(src/corefx)
+endif()
 
 if(CLR_CMAKE_PLATFORM_UNIX)
-  add_subdirectory(src/ToolBox/SOS/lldbplugin)
-  if(NOT DEFINED CLR_CROSS_COMPONENTS_BUILD)
+    add_subdirectory(src/ToolBox/SOS/lldbplugin)
     add_subdirectory(src/pal)
-  endif(NOT DEFINED CLR_CROSS_COMPONENTS_BUILD)
-  add_subdirectory(src/coreclr/hosts)
-  add_subdirectory(src/ildasm/unixcoreclrloader)
+    add_subdirectory(src/coreclr/hosts)
+    add_subdirectory(src/ildasm/unixcoreclrloader)
 endif(CLR_CMAKE_PLATFORM_UNIX)
 
 # Add this subdir. We install the headers for the jit.
@@ -562,6 +575,14 @@ endif(WIN32)
 # Include the basic prebuilt headers - required for getting fileversion resource details.
 include_directories("src/pal/prebuilt/inc")
 include_directories("bin/obj")
+
+if(FEATURE_STANDALONE_GC)
+  add_definitions(-DFEATURE_STANDALONE_GC)
+
+  if(CLR_CMAKE_PLATFORM_UNIX)
+    add_subdirectory(src/gc/unix)
+  endif(CLR_CMAKE_PLATFORM_UNIX)
+endif(FEATURE_STANDALONE_GC)
 
 if (CLR_CMAKE_PLATFORM_UNIX)
   include_directories("src/pal/inc")

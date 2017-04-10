@@ -441,13 +441,13 @@ void CALLBACK ScanPointerForProfilerAndETW(_UNCHECKED_OBJECTREF *pObjRef, uintpt
     ScanContext *pSC = (ScanContext *)lp1;
 
     uint32_t rootFlags = 0;
-    BOOL isDependent = FALSE;
+    bool isDependent = false;
 
     OBJECTHANDLE handle = (OBJECTHANDLE)(pRef);
     switch (HandleFetchType(handle))
     {
     case    HNDTYPE_DEPENDENT:
-        isDependent = TRUE;
+        isDependent = true;
         break;
     case    HNDTYPE_WEAK_SHORT:
     case    HNDTYPE_WEAK_LONG:
@@ -871,24 +871,6 @@ void Ref_EndSynchronousGC(uint32_t condemned, uint32_t maxgen)
 */    
 }
 
-
-OBJECTHANDLE CreateDependentHandle(HHANDLETABLE table, OBJECTREF primary, OBJECTREF secondary)
-{ 
-    CONTRACTL
-    {
-        THROWS;
-        GC_NOTRIGGER;
-        MODE_COOPERATIVE;
-    }
-    CONTRACTL_END;
-
-    OBJECTHANDLE handle = HndCreateHandle(table, HNDTYPE_DEPENDENT, primary); 
-
-    SetDependentHandleSecondary(handle, secondary);
-
-    return handle;
-}
-
 void SetDependentHandleSecondary(OBJECTHANDLE handle, OBJECTREF objref)
 { 
     CONTRACTL
@@ -923,30 +905,6 @@ void SetDependentHandleSecondary(OBJECTHANDLE handle, OBJECTREF objref)
 
 
 //----------------------------------------------------------------------------
-
-/*
- * CreateVariableHandle.
- *
- * Creates a variable-strength handle.
- *
- * N.B. This routine is not a macro since we do validation in RETAIL.
- * We always validate the type here because it can come from external callers.
- */
-OBJECTHANDLE CreateVariableHandle(HHANDLETABLE hTable, OBJECTREF object, uint32_t type)
-{
-    WRAPPER_NO_CONTRACT;
-
-    // verify that we are being asked to create a valid type
-    if (!IS_VALID_VHT_VALUE(type))
-    {
-        // bogus value passed in
-        _ASSERTE(FALSE);
-        return NULL;
-    }
-
-    // create the handle
-    return HndCreateHandle(hTable, HNDTYPE_VARIABLE, object, (uintptr_t)type);
-}
 
 /*
 * GetVariableHandleType.

@@ -2,12 +2,13 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
+using System;
+using System.Runtime;
+using System.Diagnostics;
+using System.Diagnostics.Contracts;
+
 namespace System.Text
 {
-    using System;
-    using System.Runtime;
-    using System.Diagnostics.Contracts;
-
     [Serializable]
     public sealed class EncoderReplacementFallback : EncoderFallback
     {
@@ -27,11 +28,11 @@ namespace System.Text
             Contract.EndContractBlock();
 
             // Make sure it doesn't have bad surrogate pairs
-            bool bFoundHigh=false;
+            bool bFoundHigh = false;
             for (int i = 0; i < replacement.Length; i++)
             {
                 // Found a surrogate?
-                if (Char.IsSurrogate(replacement,i))
+                if (Char.IsSurrogate(replacement, i))
                 {
                     // High or Low?
                     if (Char.IsHighSurrogate(replacement, i))
@@ -60,17 +61,17 @@ namespace System.Text
                     break;
             }
             if (bFoundHigh)
-                throw new ArgumentException(Environment.GetResourceString("Argument_InvalidCharSequenceNoIndex", nameof(replacement)));
+                throw new ArgumentException(SR.Format(SR.Argument_InvalidCharSequenceNoIndex, nameof(replacement)));
 
             strDefault = replacement;
         }
 
         public String DefaultString
         {
-             get
-             {
+            get
+            {
                 return strDefault;
-             }
+            }
         }
 
         public override EncoderFallbackBuffer CreateFallbackBuffer()
@@ -92,7 +93,7 @@ namespace System.Text
             EncoderReplacementFallback that = value as EncoderReplacementFallback;
             if (that != null)
             {
-                return (this.strDefault == that.strDefault);
+                return (strDefault == that.strDefault);
             }
             return (false);
         }
@@ -109,14 +110,14 @@ namespace System.Text
     {
         // Store our default string
         private String strDefault;
-        int fallbackCount = -1;
-        int fallbackIndex = -1;
+        private int fallbackCount = -1;
+        private int fallbackIndex = -1;
 
         // Construction
         public EncoderReplacementFallbackBuffer(EncoderReplacementFallback fallback)
         {
             // 2X in case we're a surrogate pair
-            this.strDefault = fallback.DefaultString + fallback.DefaultString;
+            strDefault = fallback.DefaultString + fallback.DefaultString;
         }
 
         // Fallback Methods
@@ -128,8 +129,8 @@ namespace System.Text
             {
                 // If we're recursive we may still have something in our buffer that makes this a surrogate
                 if (char.IsHighSurrogate(charUnknown) && fallbackCount >= 0 &&
-                    char.IsLowSurrogate(strDefault[fallbackIndex+1]))
-                    ThrowLastCharRecursive(Char.ConvertToUtf32(charUnknown, strDefault[fallbackIndex+1]));
+                    char.IsLowSurrogate(strDefault[fallbackIndex + 1]))
+                    ThrowLastCharRecursive(Char.ConvertToUtf32(charUnknown, strDefault[fallbackIndex + 1]));
 
                 // Nope, just one character
                 ThrowLastCharRecursive(unchecked((int)charUnknown));
@@ -137,7 +138,7 @@ namespace System.Text
 
             // Go ahead and get our fallback
             // Divide by 2 because we aren't a surrogate pair
-            fallbackCount = strDefault.Length/2;
+            fallbackCount = strDefault.Length / 2;
             fallbackIndex = -1;
 
             return fallbackCount != 0;
@@ -148,13 +149,11 @@ namespace System.Text
             // Double check input surrogate pair
             if (!Char.IsHighSurrogate(charUnknownHigh))
                 throw new ArgumentOutOfRangeException(nameof(charUnknownHigh),
-                    Environment.GetResourceString("ArgumentOutOfRange_Range",
-                    0xD800, 0xDBFF));
+                    SR.Format(SR.ArgumentOutOfRange_Range, 0xD800, 0xDBFF));
 
             if (!Char.IsLowSurrogate(charUnknownLow))
-                throw new ArgumentOutOfRangeException("CharUnknownLow",
-                    Environment.GetResourceString("ArgumentOutOfRange_Range",
-                    0xDC00, 0xDFFF));
+                throw new ArgumentOutOfRangeException(nameof(charUnknownLow),
+                    SR.Format(SR.ArgumentOutOfRange_Range, 0xDC00, 0xDFFF));
             Contract.EndContractBlock();
 
             // If we had a buffer already we're being recursive, throw, it's probably at the suspect
@@ -175,7 +174,7 @@ namespace System.Text
             // and we need to detect recursion.  We could have a flag but we already have this counter.
             fallbackCount--;
             fallbackIndex++;
-            
+
             // Do we have anything left? 0 is now last fallback char, negative is nothing left
             if (fallbackCount < 0)
                 return '\0';
@@ -189,7 +188,7 @@ namespace System.Text
             }
 
             // Now make sure its in the expected range
-            Contract.Assert(fallbackIndex < strDefault.Length && fallbackIndex >= 0,
+            Debug.Assert(fallbackIndex < strDefault.Length && fallbackIndex >= 0,
                             "Index exceeds buffer range");
 
             return strDefault[fallbackIndex];
@@ -220,7 +219,6 @@ namespace System.Text
         }
 
         // Clear the buffer
-        [System.Security.SecuritySafeCritical]  // auto-generated
         public override unsafe void Reset()
         {
             fallbackCount = -1;

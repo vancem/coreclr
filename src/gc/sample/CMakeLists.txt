@@ -10,6 +10,7 @@ set(SOURCES
     gcenv.ee.cpp
     ../gccommon.cpp
     ../gceewks.cpp
+    ../gchandletable.cpp
     ../gcscan.cpp
     ../gcwks.cpp
     ../handletable.cpp
@@ -22,11 +23,11 @@ set(SOURCES
 
 if(WIN32)
     list(APPEND SOURCES
-        gcenv.windows.cpp)
+        ../windows/gcenv.windows.cpp)
     add_definitions(-DUNICODE=1)
 else()
     list(APPEND SOURCES
-        gcenv.unix.cpp)
+        ../gcenv.unix.cpp)
 endif()
 
 _add_executable(gcsample

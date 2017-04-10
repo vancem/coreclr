@@ -13,28 +13,30 @@
 **
 **
 ===========================================================*/
+
 using System;
 using System.Runtime.InteropServices;
+using System.Diagnostics;
 using System.Diagnostics.Contracts;
 
-namespace System.IO {
+namespace System.IO
+{
     internal sealed unsafe class PinnedBufferMemoryStream : UnmanagedMemoryStream
     {
         private byte[] _array;
         private GCHandle _pinningHandle;
 
         // The new inheritance model requires a Critical default ctor since base (UnmanagedMemoryStream) has one
-        [System.Security.SecurityCritical]
-        private PinnedBufferMemoryStream():base(){}
+        private PinnedBufferMemoryStream() : base() { }
 
-        [System.Security.SecurityCritical]  // auto-generated
         internal PinnedBufferMemoryStream(byte[] array)
         {
-            Contract.Assert(array != null, "Array can't be null");
+            Debug.Assert(array != null, "Array can't be null");
 
             int len = array.Length;
             // Handle 0 length byte arrays specially.
-            if (len == 0) {
+            if (len == 0)
+            {
                 array = new byte[1];
                 len = 0;
             }
@@ -43,8 +45,8 @@ namespace System.IO {
             _pinningHandle = new GCHandle(array, GCHandleType.Pinned);
             // Now the byte[] is pinned for the lifetime of this instance.
             // But I also need to get a pointer to that block of memory...
-            fixed(byte* ptr = _array)
-                Initialize(ptr, len, len, FileAccess.Read, true);
+            fixed (byte* ptr = &_array[0])
+                Initialize(ptr, len, len, FileAccess.Read);
         }
 
         ~PinnedBufferMemoryStream()
@@ -52,17 +54,18 @@ namespace System.IO {
             Dispose(false);
         }
 
-        [System.Security.SecuritySafeCritical]  // auto-generated
         protected override void Dispose(bool disposing)
         {
-            if (_isOpen) {
+            if (_isOpen)
+            {
                 _pinningHandle.Free();
                 _isOpen = false;
             }
 #if _DEBUG
             // To help track down lifetime issues on checked builds, force 
             //a full GC here.
-            if (disposing) {
+            if (disposing)
+            {
                 GC.Collect();
                 GC.WaitForPendingFinalizers();
             }

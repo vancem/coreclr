@@ -37,7 +37,7 @@
 // Aliases for Win32 types
 //
 
-typedef uint32_t BOOL;
+typedef int BOOL;
 typedef uint32_t DWORD;
 
 // -----------------------------------------------------------------------------------------------------------
@@ -65,6 +65,7 @@ inline HRESULT HRESULT_FROM_WIN32(unsigned long x)
 #define E_UNEXPECTED            0x8000FFFF
 #define E_NOTIMPL               0x80004001
 #define E_INVALIDARG            0x80070057
+#define COR_E_EXECUTIONENGINE   0x80131506
 
 #define NOERROR                 0x0
 #define ERROR_TIMEOUT           1460
@@ -96,7 +97,7 @@ inline HRESULT HRESULT_FROM_WIN32(unsigned long x)
 #define UNREFERENCED_PARAMETER(P)          (void)(P)
 
 #ifdef PLATFORM_UNIX
-#define  _vsnprintf vsnprintf
+#define _vsnprintf_s(string, sizeInBytes, count, format, args) vsnprintf(string, sizeInBytes, format, args)
 #define sprintf_s snprintf
 #define swprintf_s swprintf
 #endif
@@ -328,16 +329,6 @@ typedef PTR_PTR_Object PTR_OBJECTREF;
 typedef PTR_Object _UNCHECKED_OBJECTREF;
 typedef PTR_PTR_Object PTR_UNCHECKED_OBJECTREF;
 
-#ifndef DACCESS_COMPILE
-struct OBJECTHANDLE__
-{
-    void* unused;
-};
-typedef struct OBJECTHANDLE__* OBJECTHANDLE;
-#else
-typedef TADDR OBJECTHANDLE;
-#endif
-
 // With no object reference wrapping the following macros are very simple.
 #define ObjectToOBJECTREF(_obj) (OBJECTREF)(_obj)
 #define OBJECTREFToObject(_obj) (Object*)(_obj)
@@ -441,8 +432,6 @@ extern MethodTable * g_pFreeObjectMethodTable;
 
 extern int32_t g_TrapReturningThreads;
 
-extern bool g_fFinalizerRunOnShutDown;
-
 //
 // Locks
 //
@@ -453,21 +442,6 @@ class Thread;
 Thread * GetThread();
 
 typedef void (CALLBACK *HANDLESCANPROC)(PTR_UNCHECKED_OBJECTREF pref, uintptr_t *pExtraInfo, uintptr_t param1, uintptr_t param2);
-
-class FinalizerThread
-{
-public:
-    static bool Initialize();
-    static void EnableFinalization();
-
-    static bool HaveExtraWorkForFinalizer();
-
-    static bool IsCurrentThreadFinalizer();
-    static void Wait(DWORD timeout, bool allowReentrantWait = false);
-    static void SignalFinalizationDone(bool fFinalizer);
-    static void SetFinalizerThread(Thread * pThread);
-    static HANDLE GetFinalizerEvent();
-};
 
 bool IsGCSpecialThread();
 
@@ -509,8 +483,6 @@ void LogSpewAlways(const char *fmt, ...);
 
 // -----------------------------------------------------------------------------------------------------------
 
-void StompWriteBarrierEphemeral(bool isRuntimeSuspended);
-void StompWriteBarrierResize(bool isRuntimeSuspended, bool bReqUpperBoundsCheck);
 bool IsGCThread();
 
 class CLRConfig

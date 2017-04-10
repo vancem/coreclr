@@ -57,6 +57,10 @@ void genCompareInt(GenTreePtr treeNode);
 
 #if !defined(_TARGET_64BIT_)
 void genCompareLong(GenTreePtr treeNode);
+#if defined(_TARGET_ARM_)
+void genJccLongHi(genTreeOps cmp, BasicBlock* jumpTrue, BasicBlock* jumpFalse, bool isUnsigned = false);
+void genJccLongLo(genTreeOps cmp, BasicBlock* jumpTrue, BasicBlock* jumpFalse);
+#endif // defined(_TARGET_ARM_)
 #endif
 
 #ifdef FEATURE_SIMD
@@ -68,7 +72,8 @@ enum SIMDScalarMoveType
 };
 
 instruction getOpForSIMDIntrinsic(SIMDIntrinsicID intrinsicId, var_types baseType, unsigned* ival = nullptr);
-void genSIMDScalarMove(var_types type, regNumber target, regNumber src, SIMDScalarMoveType moveType);
+void genSIMDScalarMove(
+    var_types targetType, var_types type, regNumber target, regNumber src, SIMDScalarMoveType moveType);
 void genSIMDZero(var_types targetType, var_types baseType, regNumber targetReg);
 void genSIMDIntrinsicInit(GenTreeSIMD* simdNode);
 void genSIMDIntrinsicInitN(GenTreeSIMD* simdNode);
@@ -92,9 +97,13 @@ void genSIMDCheck(GenTree* treeNode);
 // their size rounded to TARGET_POINTER_SIZE (which is 8 bytes on 64-bit targets) and hence
 // Vector3 locals could be treated as TYP_SIMD16 while reading/writing.
 void genStoreIndTypeSIMD12(GenTree* treeNode);
-void genStoreLclFldTypeSIMD12(GenTree* treeNode);
 void genLoadIndTypeSIMD12(GenTree* treeNode);
-void genLoadLclFldTypeSIMD12(GenTree* treeNode);
+void genStoreLclTypeSIMD12(GenTree* treeNode);
+void genLoadLclTypeSIMD12(GenTree* treeNode);
+#ifdef _TARGET_X86_
+void genStoreSIMD12ToStack(regNumber operandReg, regNumber tmpReg);
+void genPutArgStkSIMD12(GenTree* treeNode);
+#endif // _TARGET_X86_
 #endif // FEATURE_SIMD
 
 #if !defined(_TARGET_64BIT_)
@@ -149,7 +158,7 @@ void genSetRegToIcon(regNumber reg, ssize_t val, var_types type = TYP_INT, insFl
 
 void genCodeForShift(GenTreePtr tree);
 
-#if defined(_TARGET_X86_)
+#if defined(_TARGET_X86_) || defined(_TARGET_ARM_)
 void genCodeForShiftLong(GenTreePtr tree);
 #endif
 
@@ -165,6 +174,44 @@ void genCodeForCpBlkRepMovs(GenTreeBlk* cpBlkNode);
 
 void genCodeForCpBlkUnroll(GenTreeBlk* cpBlkNode);
 
+void genAlignStackBeforeCall(GenTreePutArgStk* putArgStk);
+void genAlignStackBeforeCall(GenTreeCall* call);
+void genRemoveAlignmentAfterCall(GenTreeCall* call, unsigned bias = 0);
+
+#if defined(UNIX_X86_ABI)
+
+unsigned curNestedAlignment; // Keep track of alignment adjustment required during codegen.
+unsigned maxNestedAlignment; // The maximum amount of alignment adjustment required.
+
+void SubtractNestedAlignment(unsigned adjustment)
+{
+    assert(curNestedAlignment >= adjustment);
+    unsigned newNestedAlignment = curNestedAlignment - adjustment;
+    if (curNestedAlignment != newNestedAlignment)
+    {
+        JITDUMP("Adjusting stack nested alignment from %d to %d\n", curNestedAlignment, newNestedAlignment);
+    }
+    curNestedAlignment = newNestedAlignment;
+}
+
+void AddNestedAlignment(unsigned adjustment)
+{
+    unsigned newNestedAlignment = curNestedAlignment + adjustment;
+    if (curNestedAlignment != newNestedAlignment)
+    {
+        JITDUMP("Adjusting stack nested alignment from %d to %d\n", curNestedAlignment, newNestedAlignment);
+    }
+    curNestedAlignment = newNestedAlignment;
+
+    if (curNestedAlignment > maxNestedAlignment)
+    {
+        JITDUMP("Max stack nested alignment changed from %d to %d\n", maxNestedAlignment, curNestedAlignment);
+        maxNestedAlignment = curNestedAlignment;
+    }
+}
+
+#endif
+
 #ifdef FEATURE_PUT_STRUCT_ARG_STK
 #ifdef _TARGET_X86_
 bool genAdjustStackForPutArgStk(GenTreePutArgStk* putArgStk);
@@ -174,10 +221,10 @@ void genPutArgStkFieldList(GenTreePutArgStk* putArgStk);
 
 void genPutStructArgStk(GenTreePutArgStk* treeNode);
 
-int genMove8IfNeeded(unsigned size, regNumber tmpReg, GenTree* srcAddr, unsigned offset);
-int genMove4IfNeeded(unsigned size, regNumber tmpReg, GenTree* srcAddr, unsigned offset);
-int genMove2IfNeeded(unsigned size, regNumber tmpReg, GenTree* srcAddr, unsigned offset);
-int genMove1IfNeeded(unsigned size, regNumber tmpReg, GenTree* srcAddr, unsigned offset);
+unsigned genMove8IfNeeded(unsigned size, regNumber tmpReg, GenTree* srcAddr, unsigned offset);
+unsigned genMove4IfNeeded(unsigned size, regNumber tmpReg, GenTree* srcAddr, unsigned offset);
+unsigned genMove2IfNeeded(unsigned size, regNumber tmpReg, GenTree* srcAddr, unsigned offset);
+unsigned genMove1IfNeeded(unsigned size, regNumber tmpReg, GenTree* srcAddr, unsigned offset);
 void genStructPutArgRepMovs(GenTreePutArgStk* putArgStkNode);
 void genStructPutArgUnroll(GenTreePutArgStk* putArgStkNode);
 void genStoreRegToStackArg(var_types type, regNumber reg, int offset);
@@ -185,7 +232,13 @@ void genStoreRegToStackArg(var_types type, regNumber reg, int offset);
 
 void genCodeForLoadOffset(instruction ins, emitAttr size, regNumber dst, GenTree* base, unsigned offset);
 
-void genCodeForStoreOffset(instruction ins, emitAttr size, regNumber dst, GenTree* base, unsigned offset);
+void genCodeForStoreOffset(instruction ins, emitAttr size, regNumber src, GenTree* base, unsigned offset);
+
+#ifdef _TARGET_ARM64_
+void genCodeForLoadPairOffset(regNumber dst, regNumber dst2, GenTree* base, unsigned offset);
+
+void genCodeForStorePairOffset(regNumber src, regNumber src2, GenTree* base, unsigned offset);
+#endif // _TARGET_ARM64_
 
 void genCodeForStoreBlk(GenTreeBlk* storeBlkNode);
 
@@ -209,11 +262,11 @@ void genStoreInd(GenTreePtr node);
 
 bool genEmitOptimizedGCWriteBarrier(GCInfo::WriteBarrierForm writeBarrierForm, GenTree* addr, GenTree* data);
 
-void genCallInstruction(GenTreePtr call);
+void genCallInstruction(GenTreeCall* call);
 
 void genJmpMethod(GenTreePtr jmp);
 
-BasicBlock* genCallFinally(BasicBlock* block, BasicBlock* lblk);
+BasicBlock* genCallFinally(BasicBlock* block);
 
 #if FEATURE_EH_FUNCLETS
 void genEHCatchRet(BasicBlock* block);
@@ -253,7 +306,8 @@ unsigned m_stkArgOffset;
 
 #ifdef DEBUG
 GenTree* lastConsumedNode;
-void genCheckConsumeNode(GenTree* treeNode);
+void genNumberOperandUse(GenTree* const operand, int& useNum) const;
+void genCheckConsumeNode(GenTree* const node);
 #else  // !DEBUG
 inline void genCheckConsumeNode(GenTree* treeNode)
 {

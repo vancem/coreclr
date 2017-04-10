@@ -11,20 +11,15 @@
 **
 =============================================================================*/
 
-namespace System.Runtime.InteropServices {
-   
-    using System;
-    using System.Security;
-    using System.Security.Permissions;
 
+using System;
+using System.Security;
+
+namespace System.Runtime.InteropServices
+{
     [Serializable]
-[System.Runtime.InteropServices.ComVisible(true)]
     public sealed class DispatchWrapper
     {
-        [System.Security.SecuritySafeCritical]  // auto-generated
-#pragma warning disable 618
-        [SecurityPermissionAttribute(SecurityAction.Demand,Flags=SecurityPermissionFlag.UnmanagedCode)]
-#pragma warning restore 618
         public DispatchWrapper(Object obj)
         {
             if (obj != null)
@@ -38,9 +33,9 @@ namespace System.Runtime.InteropServices {
             m_WrappedObject = obj;
         }
 
-        public Object WrappedObject 
+        public Object WrappedObject
         {
-            get 
+            get
             {
                 return m_WrappedObject;
             }

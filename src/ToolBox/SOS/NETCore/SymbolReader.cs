@@ -23,6 +23,14 @@ namespace SOS
             public string fileName;
         }
 
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        internal struct LocalVarInfo
+        {
+            public int startOffset;
+            public int endOffset;
+            public string name;
+        }
+
         [StructLayout(LayoutKind.Sequential)]
         internal struct MethodDebugInfo
         {
@@ -37,7 +45,7 @@ namespace SOS
         /// Read memory callback
         /// </summary>
         /// <returns>number of bytes read or 0 for error</returns>
-        internal unsafe delegate int ReadMemoryDelegate(IntPtr address, byte* buffer, int count);
+        internal unsafe delegate int ReadMemoryDelegate(ulong address, byte* buffer, int count);
 
         private sealed class OpenedReader : IDisposable
         {
@@ -61,7 +69,7 @@ namespace SOS
         /// </summary>
         private class TargetStream : Stream
         {
-            readonly IntPtr _address;
+            readonly ulong _address;
             readonly ReadMemoryDelegate _readMemory;
 
             public override long Position { get; set; }
@@ -70,7 +78,7 @@ namespace SOS
             public override bool CanRead { get { return true; } }
             public override bool CanWrite { get { return false; } }
 
-            public TargetStream(IntPtr address, int size, ReadMemoryDelegate readMemory)
+            public TargetStream(ulong address, int size, ReadMemoryDelegate readMemory)
                 : base()
             {
                 _address = address;
@@ -89,7 +97,7 @@ namespace SOS
                 {
                     fixed (byte* p = &buffer[offset])
                     {
-                        int read  = _readMemory(new IntPtr(_address.ToInt64() + Position), p, count);
+                        int read  = _readMemory(_address + (ulong)Position, p, count);
                         Position += read;
                         return read;
                     }
@@ -157,18 +165,18 @@ namespace SOS
         /// <param name="inMemoryPdbAddress">in memory PDB address or zero</param>
         /// <param name="inMemoryPdbSize">in memory PDB size</param>
         /// <returns>Symbol reader handle or zero if error</returns>
-        internal static IntPtr LoadSymbolsForModule(string assemblyPath, bool isFileLayout, IntPtr loadedPeAddress, int loadedPeSize, 
-            IntPtr inMemoryPdbAddress, int inMemoryPdbSize, ReadMemoryDelegate readMemory)
+        internal static IntPtr LoadSymbolsForModule(string assemblyPath, bool isFileLayout, ulong loadedPeAddress, int loadedPeSize, 
+            ulong inMemoryPdbAddress, int inMemoryPdbSize, ReadMemoryDelegate readMemory)
         {
             try
             {
                 TargetStream peStream = null;
-                if (assemblyPath == null && loadedPeAddress != IntPtr.Zero)
+                if (assemblyPath == null && loadedPeAddress != 0)
                 {
                     peStream = new TargetStream(loadedPeAddress, loadedPeSize, readMemory);
                 }
                 TargetStream pdbStream = null;
-                if (inMemoryPdbAddress != IntPtr.Zero)
+                if (inMemoryPdbAddress != 0)
                 {
                     pdbStream = new TargetStream(inMemoryPdbAddress, inMemoryPdbSize, readMemory);
                 }
@@ -296,6 +304,9 @@ namespace SOS
                     return false;
 
                 MethodDebugInformationHandle methodDebugHandle = ((MethodDefinitionHandle)handle).ToDebugInformationHandle();
+                if (methodDebugHandle.IsNil)
+                    return false;
+
                 MethodDebugInformation methodDebugInfo = reader.GetMethodDebugInformation(methodDebugHandle);
                 SequencePointCollection sequencePoints = methodDebugInfo.GetSequencePoints();
 
@@ -394,7 +405,7 @@ namespace SOS
             }
             return false;
         }
-        internal static bool GetLocalsInfoForMethod(string assemblyPath, int methodToken, out List<string> locals)
+        internal static bool GetLocalsInfoForMethod(string assemblyPath, int methodToken, out List<LocalVarInfo> locals)
         {
             locals = null;
 
@@ -410,7 +421,7 @@ namespace SOS
                     if (handle.Kind != HandleKind.MethodDefinition)
                         return false;
 
-                    locals = new List<string>();
+                    locals = new List<LocalVarInfo>();
 
                     MethodDebugInformationHandle methodDebugHandle =
                         ((MethodDefinitionHandle)handle).ToDebugInformationHandle();
@@ -424,7 +435,11 @@ namespace SOS
                             LocalVariable localVar = openedReader.Reader.GetLocalVariable(varHandle);
                             if (localVar.Attributes == LocalVariableAttributes.DebuggerHidden)
                                 continue;
-                            locals.Add(openedReader.Reader.GetString(localVar.Name));
+                            LocalVarInfo info = new LocalVarInfo();
+                            info.startOffset = scope.StartOffset;
+                            info.endOffset = scope.EndOffset;
+                            info.name = openedReader.Reader.GetString(localVar.Name);
+                            locals.Add(info);
                         }
                     }
                 }
@@ -449,7 +464,7 @@ namespace SOS
             try
             {
                 List<DebugInfo> points = null;
-                List<string> locals = null;
+                List<LocalVarInfo> locals = null;
 
                 if (!GetDebugInfoForMethod(assemblyPath, methodToken, out points))
                 {
@@ -470,14 +485,18 @@ namespace SOS
                     Marshal.StructureToPtr(info, ptr, false);
                     ptr = (IntPtr)(ptr.ToInt64() + structSize);
                 }
+
+                structSize = Marshal.SizeOf<LocalVarInfo>();
+
                 debugInfo.localsSize = locals.Count;
-                debugInfo.locals = Marshal.AllocHGlobal(debugInfo.localsSize * Marshal.SizeOf<IntPtr>());
-                IntPtr ptrLocals = debugInfo.locals;
-                foreach (string s in locals)
+                ptr = debugInfo.locals;
+
+                foreach (var info in locals)
                 {
-                    Marshal.WriteIntPtr(ptrLocals, Marshal.StringToHGlobalUni(s));
-                    ptrLocals += Marshal.SizeOf<IntPtr>();
+                    Marshal.StructureToPtr(info, ptr, false);
+                    ptr = (IntPtr)(ptr.ToInt64() + structSize);
                 }
+
                 return true;
             }
             catch

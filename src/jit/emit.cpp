@@ -1027,7 +1027,7 @@ void emitter::emitBegFN(bool hasFramePtr
     emitPlaceholderList = emitPlaceholderLast = nullptr;
 
 #ifdef JIT32_GCENCODER
-    emitEpilogList = emitEpilogLast = NULL;
+    emitEpilogList = emitEpilogLast = nullptr;
 #endif // JIT32_GCENCODER
 
     /* We don't have any jumps */
@@ -1215,14 +1215,12 @@ size_t emitter::emitGenEpilogLst(size_t (*fp)(void*, unsigned), void* cp)
     EpilogList* el;
     size_t      sz;
 
-    for (el = emitEpilogList, sz = 0; el; el = el->elNext)
+    for (el = emitEpilogList, sz = 0; el != nullptr; el = el->elNext)
     {
-        assert(el->elIG->igFlags & IGF_EPILOG);
+        assert(el->elLoc.GetIG()->igFlags & IGF_EPILOG);
 
-        UNATIVE_OFFSET ofs =
-            el->elIG->igOffs; // The epilog starts at the beginning of the IG, so the IG offset is correct
-
-        sz += fp(cp, ofs);
+        // The epilog starts at the location recorded in the epilog list.
+        sz += fp(cp, el->elLoc.CodeOffset(this));
     }
 
     return sz;
@@ -1383,7 +1381,6 @@ void* emitter::emitAllocInstr(size_t sz, emitAttr opsz)
         id->idOpSize(EA_SIZE(opsz));
     }
 
-#if RELOC_SUPPORT
     // Amd64: ip-relative addressing is supported even when not generating relocatable ngen code
     if (EA_IS_DSP_RELOC(opsz)
 #ifndef _TARGET_AMD64_
@@ -1402,7 +1399,6 @@ void* emitter::emitAllocInstr(size_t sz, emitAttr opsz)
         /* instruction has an immediate constant that is relocatable */
         id->idSetIsCnsReloc();
     }
-#endif
 
 #if EMITTER_STATS
     emitTotalInsCnt++;
@@ -1643,12 +1639,10 @@ void emitter::emitCreatePlaceholderIG(insGroupPlaceholderType igType,
     {
         igPh->igFlags |= IGF_FUNCLET_PROLOG;
     }
-#ifdef DEBUG
     else if (igType == IGPT_FUNCLET_EPILOG)
     {
         igPh->igFlags |= IGF_FUNCLET_EPILOG;
     }
-#endif // DEBUG
 #endif // FEATURE_EH_FUNCLETS
 
     /* Link it into the placeholder list */
@@ -1959,22 +1953,20 @@ void emitter::emitBegFnEpilog(insGroup* igPh)
 
 #ifdef JIT32_GCENCODER
 
-    EpilogList* el = new (emitComp, CMK_GC) EpilogList;
-    el->elNext     = NULL;
-    el->elIG       = emitCurIG;
+    EpilogList* el = new (emitComp, CMK_GC) EpilogList();
 
-    if (emitEpilogLast)
+    if (emitEpilogLast != nullptr)
+    {
         emitEpilogLast->elNext = el;
+    }
     else
+    {
         emitEpilogList = el;
+    }
 
     emitEpilogLast = el;
 
 #endif // JIT32_GCENCODER
-
-    /* Remember current position so that we can compute total epilog size */
-
-    emitEpilogBegLoc.CaptureLocation(this);
 }
 
 /*****************************************************************************
@@ -1986,22 +1978,17 @@ void emitter::emitEndFnEpilog()
 {
     emitEndPrologEpilog();
 
-    UNATIVE_OFFSET newSize;
-    UNATIVE_OFFSET epilogBegCodeOffset = emitEpilogBegLoc.CodeOffset(this);
-#ifdef _TARGET_XARCH_
+#ifdef JIT32_GCENCODER
+    assert(emitEpilogLast != nullptr);
+
+    UNATIVE_OFFSET epilogBegCodeOffset          = emitEpilogLast->elLoc.CodeOffset(this);
     UNATIVE_OFFSET epilogExitSeqStartCodeOffset = emitExitSeqBegLoc.CodeOffset(this);
-#else
-    UNATIVE_OFFSET epilogExitSeqStartCodeOffset = emitCodeOffset(emitCurIG, emitCurOffset());
-#endif
-
-    newSize = epilogExitSeqStartCodeOffset - epilogBegCodeOffset;
-
-#ifdef _TARGET_X86_
+    UNATIVE_OFFSET newSize                      = epilogExitSeqStartCodeOffset - epilogBegCodeOffset;
 
     /* Compute total epilog size */
-
     assert(emitEpilogSize == 0 || emitEpilogSize == newSize); // All epilogs must be identical
-    emitEpilogSize                     = newSize;
+    emitEpilogSize = newSize;
+
     UNATIVE_OFFSET epilogEndCodeOffset = emitCodeOffset(emitCurIG, emitCurOffset());
     assert(epilogExitSeqStartCodeOffset != epilogEndCodeOffset);
 
@@ -2021,8 +2008,7 @@ void emitter::emitEndFnEpilog()
                );
         emitExitSeqSize = newSize;
     }
-
-#endif // _TARGET_X86_
+#endif // JIT32_GCENCODER
 }
 
 #if FEATURE_EH_FUNCLETS
@@ -2070,6 +2056,16 @@ void emitter::emitEndFuncletEpilog()
 #endif // FEATURE_EH_FUNCLETS
 
 #ifdef JIT32_GCENCODER
+
+//
+// emitter::emitStartEpilog:
+//   Mark the current position so that we can later compute the total epilog size.
+//
+void emitter::emitStartEpilog()
+{
+    assert(emitEpilogLast != nullptr);
+    emitEpilogLast->elLoc.CaptureLocation(this);
+}
 
 /*****************************************************************************
  *
@@ -4235,7 +4231,7 @@ void emitter::emitCheckFuncletBranch(instrDesc* jmp, insGroup* jmpIG)
     // meets one of those criteria...
     assert(jmp->idIsBound());
 
-#ifdef _TARGET_AMD64_
+#ifdef _TARGET_XARCH_
     // An lea of a code address (for constant data stored with the code)
     // is treated like a jump for emission purposes but is not really a jump so
     // we don't have to check anything here.
@@ -4421,7 +4417,10 @@ unsigned emitter::emitEndCodeGen(Compiler* comp,
 #if EMIT_TRACK_STACK_DEPTH
     /* Convert max. stack depth from # of bytes to # of entries */
 
-    emitMaxStackDepth /= sizeof(int);
+    unsigned maxStackDepthIn4ByteElements = emitMaxStackDepth / sizeof(int);
+    JITDUMP("Converting emitMaxStackDepth from bytes (%d) to elements (%d)\n", emitMaxStackDepth,
+            maxStackDepthIn4ByteElements);
+    emitMaxStackDepth = maxStackDepthIn4ByteElements;
 
     /* Should we use the simple stack */
 
@@ -4501,7 +4500,7 @@ unsigned emitter::emitEndCodeGen(Compiler* comp,
     //
     if (emitComp->fgHaveProfileData())
     {
-        if (emitComp->fgCalledWeight > (BB_VERY_HOT_WEIGHT * emitComp->fgNumProfileRuns))
+        if (emitComp->fgCalledCount > (BB_VERY_HOT_WEIGHT * emitComp->fgProfileRunsCount()))
         {
             allocMemFlag = CORJIT_ALLOCMEM_FLG_16BYTE_ALIGN;
         }
@@ -6038,7 +6037,7 @@ unsigned char emitter::emitOutputLong(BYTE* dst, ssize_t val)
 #ifdef DEBUG
     if (emitComp->opts.dspEmit)
     {
-        printf("; emit_long 0%08XH\n", val);
+        printf("; emit_long 0%08XH\n", (int)val);
     }
 #ifdef _TARGET_AMD64_
     // if we're emitting code bytes, ensure that we've already emitted the rex prefix!
@@ -6062,15 +6061,69 @@ unsigned char emitter::emitOutputSizeT(BYTE* dst, ssize_t val)
     if (emitComp->opts.dspEmit)
     {
 #ifdef _TARGET_AMD64_
-        printf("; emit_size_t 0%016llXH\n", (size_t)val);
+        printf("; emit_size_t 0%016llXH\n", val);
 #else  // _TARGET_AMD64_
-        printf("; emit_size_t 0%08XH\n", (size_t)val);
+        printf("; emit_size_t 0%08XH\n", val);
 #endif // _TARGET_AMD64_
     }
 #endif // DEBUG
 
     return sizeof(size_t);
 }
+
+//------------------------------------------------------------------------
+// Wrappers to emitOutputByte, emitOutputWord, emitOutputLong, emitOutputSizeT
+// that take unsigned __int64 or size_t type instead of ssize_t. Used on RyuJIT/x86.
+//
+// Arguments:
+//    dst - passed through
+//    val - passed through
+//
+// Return Value:
+//    Same as wrapped function.
+//
+
+#if !defined(LEGACY_BACKEND) && defined(_TARGET_X86_)
+unsigned char emitter::emitOutputByte(BYTE* dst, size_t val)
+{
+    return emitOutputByte(dst, (ssize_t)val);
+}
+
+unsigned char emitter::emitOutputWord(BYTE* dst, size_t val)
+{
+    return emitOutputWord(dst, (ssize_t)val);
+}
+
+unsigned char emitter::emitOutputLong(BYTE* dst, size_t val)
+{
+    return emitOutputLong(dst, (ssize_t)val);
+}
+
+unsigned char emitter::emitOutputSizeT(BYTE* dst, size_t val)
+{
+    return emitOutputSizeT(dst, (ssize_t)val);
+}
+
+unsigned char emitter::emitOutputByte(BYTE* dst, unsigned __int64 val)
+{
+    return emitOutputByte(dst, (ssize_t)val);
+}
+
+unsigned char emitter::emitOutputWord(BYTE* dst, unsigned __int64 val)
+{
+    return emitOutputWord(dst, (ssize_t)val);
+}
+
+unsigned char emitter::emitOutputLong(BYTE* dst, unsigned __int64 val)
+{
+    return emitOutputLong(dst, (ssize_t)val);
+}
+
+unsigned char emitter::emitOutputSizeT(BYTE* dst, unsigned __int64 val)
+{
+    return emitOutputSizeT(dst, (ssize_t)val);
+}
+#endif // !defined(LEGACY_BACKEND) && defined(_TARGET_X86_)
 
 /*****************************************************************************
  *

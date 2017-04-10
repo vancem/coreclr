@@ -23,9 +23,6 @@
 #include "runtimehandles.h"
 #include "vars.hpp"
 #include "cycletimer.h"
-#ifdef FEATURE_REMOTING
-#include "remoting.h"
-#endif
 
 inline CORINFO_CALLINFO_FLAGS combine(CORINFO_CALLINFO_FLAGS flag1, CORINFO_CALLINFO_FLAGS flag2)
 {
@@ -903,9 +900,10 @@ CorJitResult Interpreter::GenerateInterpreterStub(CEEInfo* comp,
 #endif
         {
             // But we also have to use r4, because ThumbEmitCondRegJump below requires a low register.
+            sl.ThumbEmitMovConstant(r11, 0);
             sl.ThumbEmitMovConstant(r12, UINT_PTR(interpMethInfo));
             sl.ThumbEmitLoadRegIndirect(r12, r12, offsetof(InterpreterMethodInfo, m_jittedCode));
-            sl.ThumbEmitCmpImm(r12, 0); // Set condition codes.
+            sl.ThumbEmitCmpReg(r12, r11); // Set condition codes.
             // If r12 is zero, then go on to do the interpretation.
             CodeLabel* doInterpret = sl.NewCodeLabel();
             sl.ThumbEmitCondFlagJump(doInterpret, thumbCondEq.cond);
@@ -1578,7 +1576,7 @@ CorJitResult Interpreter::GenerateInterpreterStub(CEEInfo* comp,
 #else
 #error unsupported platform
 #endif
-        stub = sl.Link();
+        stub = sl.Link(SystemDomain::GetGlobalLoaderAllocator()->GetStubHeap());
 
         *nativeSizeOfCode = static_cast<ULONG>(stub->GetNumCodeBytes());
         // TODO: manage reference count of interpreter stubs.  Look for examples...
@@ -5992,20 +5990,6 @@ void Interpreter::NewObj()
             MethodTable * pNewObjMT = GetMethodTableFromClsHnd(methTok.hClass);
             switch (newHelper)
             {
-#ifdef FEATURE_REMOTING
-            case CORINFO_HELP_NEW_CROSSCONTEXT:
-                {
-                    if (CRemotingServices::RequiresManagedActivation(pNewObjMT) && !pNewObjMT->IsComObjectType())
-                    {
-                        thisArgObj = CRemotingServices::CreateProxyOrObject(pNewObjMT);
-                    }
-                    else
-                    {
-                        thisArgObj = AllocateObject(pNewObjMT);
-                    }
-                }
-                break;
-#endif // FEATURE_REMOTING
             case CORINFO_HELP_NEWFAST:
             default:
                 thisArgObj = AllocateObject(pNewObjMT);
@@ -7329,12 +7313,6 @@ void Interpreter::LdFld(FieldDesc* fldIn)
     {
         OBJECTREF obj = OBJECTREF(OpStackGet<Object*>(stackInd));
         ThrowOnInvalidPointer(OBJECTREFToObject(obj));
-#ifdef FEATURE_REMOTING
-        if (obj->IsTransparentProxy())
-        {
-            NYI_INTERP("Thunking objects not supported");
-        }
-#endif
         if (valCit == CORINFO_TYPE_VALUECLASS)
         {
             void* srcPtr = fld->GetInstanceAddress(obj);
@@ -8607,6 +8585,8 @@ void Interpreter::BoxStructRefAt(unsigned ind, CORINFO_CLASS_HANDLE valCls)
     if (th.IsTypeDesc())
         COMPlusThrow(kInvalidOperationException,W("InvalidOperation_TypeCannotBeBoxed"));
 
+    MethodTable* pMT = th.AsMethodTable();
+
     {
         Object* res = OBJECTREFToObject(pMT->Box(valPtr));
 
@@ -9578,7 +9558,9 @@ void Interpreter::DoCallWork(bool virtualCall, void* thisArg, CORINFO_RESOLVED_T
 
     // This is the argument slot that will be used to hold the return value.
     ARG_SLOT retVal = 0;
+#ifndef _ARM_
     _ASSERTE (NUMBER_RETURNVALUE_SLOTS == 1);
+#endif
 
     // If the return type is a structure, then these will be initialized.
     CORINFO_CLASS_HANDLE retTypeClsHnd = NULL;
@@ -10316,15 +10298,23 @@ void Interpreter::CallI()
             }
             else
             {
-                pMD = g_pPrepareConstrainedRegionsMethod;  // A random static method.
+                pMD = g_pExecuteBackoutCodeHelperMethod;  // A random static method.
             }
             MethodDescCallSite mdcs(pMD, &mSig, ftnPtr);
+#if 0
             // If the current method being interpreted is an IL stub, we're calling native code, so
             // change the GC mode.  (We'll only do this at the call if the calling convention turns out
             // to be a managed calling convention.)
             MethodDesc* pStubContextMD = reinterpret_cast<MethodDesc*>(m_stubContext);
             bool transitionToPreemptive = (pStubContextMD != NULL && !pStubContextMD->IsIL());
             mdcs.CallTargetWorker(args, &retVal, sizeof(retVal), transitionToPreemptive);
+#else
+            // TODO The code above triggers assertion at threads.cpp:6861:
+            //     _ASSERTE(thread->PreemptiveGCDisabled());  // Should have been in managed code
+            // The workaround will likely break more things than what it is fixing:
+            // just do not make transition to preemptive GC for now.
+            mdcs.CallTargetWorker(args, &retVal, sizeof(retVal));
+#endif
         }
         // retVal is now vulnerable.
         GCX_FORBID();

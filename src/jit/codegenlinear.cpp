@@ -133,9 +133,8 @@ void CodeGen::genCodeForBBlist()
      */
 
     BasicBlock* block;
-    BasicBlock* lblk; /* previous block */
 
-    for (lblk = nullptr, block = compiler->fgFirstBB; block != nullptr; lblk = block, block = block->bbNext)
+    for (block = compiler->fgFirstBB; block != nullptr; block = block->bbNext)
     {
 #ifdef DEBUG
         if (compiler->verbose)
@@ -247,6 +246,10 @@ void CodeGen::genCodeForBBlist()
             }
         }
 
+#if FEATURE_EH_FUNCLETS && defined(_TARGET_ARM_)
+        genInsertNopForUnwinder(block);
+#endif
+
         /* Start a new code output block */
 
         genUpdateCurrentFunclet(block);
@@ -284,7 +287,7 @@ void CodeGen::genCodeForBBlist()
             }
 #endif
             // We should never have a block that falls through into the Cold section
-            noway_assert(!lblk->bbFallsThrough());
+            noway_assert(!block->bbPrev->bbFallsThrough());
 
             // We require the block that starts the Cold section to have a label
             noway_assert(block->bbEmitCookie);
@@ -293,7 +296,7 @@ void CodeGen::genCodeForBBlist()
 
         /* Both stacks are always empty on entry to a basic block */
 
-        genStackLevel = 0;
+        SetStackLevel(0);
         genAdjustStackLevel(block);
         savedStkLvl = genStackLevel;
 
@@ -313,13 +316,6 @@ void CodeGen::genCodeForBBlist()
 
         bool firstMapping = true;
 
-        /*---------------------------------------------------------------------
-         *
-         *  Generate code for each statement-tree in the block
-         *
-         */
-        CLANG_FORMAT_COMMENT_ANCHOR;
-
 #if FEATURE_EH_FUNCLETS
         if (block->bbFlags & BBF_FUNCLET_BEG)
         {
@@ -334,6 +330,28 @@ void CodeGen::genCodeForBBlist()
         // Traverse the block in linear order, generating code for each node as we
         // as we encounter it.
         CLANG_FORMAT_COMMENT_ANCHOR;
+
+#ifdef DEBUG
+        // Set the use-order numbers for each node.
+        {
+            int useNum = 0;
+            for (GenTree* node : LIR::AsRange(block).NonPhiNodes())
+            {
+                assert((node->gtDebugFlags & GTF_DEBUG_NODE_CG_CONSUMED) == 0);
+
+                node->gtUseNum = -1;
+                if (node->isContained() || node->IsCopyOrReload())
+                {
+                    continue;
+                }
+
+                for (GenTree* operand : node->Operands())
+                {
+                    genNumberOperandUse(operand, useNum);
+                }
+            }
+        }
+#endif // DEBUG
 
         IL_OFFSETX currentILOffset = BAD_IL_OFFSET;
         for (GenTree* node : LIR::AsRange(block).NonPhiNodes())
@@ -472,7 +490,7 @@ void CodeGen::genCodeForBBlist()
             }
         }
 
-        genStackLevel -= savedStkLvl;
+        SubtractStackLevel(savedStkLvl);
 
 #ifdef DEBUG
         // compCurLife should be equal to the liveOut set, except that we don't keep
@@ -587,7 +605,7 @@ void CodeGen::genCodeForBBlist()
                 break;
 
             case BBJ_CALLFINALLY:
-                block = genCallFinally(block, lblk);
+                block = genCallFinally(block);
                 break;
 
 #if FEATURE_EH_FUNCLETS
@@ -853,7 +871,7 @@ void CodeGen::genUnspillRegIfNeeded(GenTree* tree)
             GenTreeLclVarCommon* lcl    = unspillTree->AsLclVarCommon();
             LclVarDsc*           varDsc = &compiler->lvaTable[lcl->gtLclNum];
 
-// TODO-Cleanup: The following code could probably be further merged and cleand up.
+// TODO-Cleanup: The following code could probably be further merged and cleaned up.
 #ifdef _TARGET_XARCH_
             // Load local variable from its home location.
             // In most cases the tree type will indicate the correct type to use for the load.
@@ -888,6 +906,13 @@ void CodeGen::genUnspillRegIfNeeded(GenTree* tree)
 
             // Fixes Issue #3326
             attr = emit->emitInsAdjustLoadStoreAttr(ins, attr);
+
+            // Load local variable from its home location.
+            inst_RV_TT(ins, dstReg, unspillTree, 0, attr);
+#elif defined(_TARGET_ARM_)
+            var_types   targetType = unspillTree->gtType;
+            instruction ins        = ins_Load(targetType, compiler->isSIMDTypeLocalAligned(lcl->gtLclNum));
+            emitAttr    attr       = emitTypeSize(targetType);
 
             // Load local variable from its home location.
             inst_RV_TT(ins, dstReg, unspillTree, 0, attr);
@@ -1031,34 +1056,55 @@ void CodeGen::genConsumeRegAndCopy(GenTree* node, regNumber needReg)
 
 // Check that registers are consumed in the right order for the current node being generated.
 #ifdef DEBUG
-void CodeGen::genCheckConsumeNode(GenTree* treeNode)
+void CodeGen::genNumberOperandUse(GenTree* const operand, int& useNum) const
 {
-    // GT_PUTARG_REG is consumed out of order.
-    if (treeNode->gtSeqNum != 0 && treeNode->OperGet() != GT_PUTARG_REG)
+    assert(operand != nullptr);
+    assert(operand->gtUseNum == -1);
+
+    // Ignore argument placeholders.
+    if (operand->OperGet() == GT_ARGPLACE)
     {
-        if (lastConsumedNode != nullptr)
-        {
-            if (treeNode == lastConsumedNode)
-            {
-                if (verbose)
-                {
-                    printf("Node was consumed twice:\n    ");
-                    compiler->gtDispTree(treeNode, nullptr, nullptr, true);
-                }
-            }
-            else
-            {
-                if (verbose && (lastConsumedNode->gtSeqNum > treeNode->gtSeqNum))
-                {
-                    printf("Nodes were consumed out-of-order:\n");
-                    compiler->gtDispTree(lastConsumedNode, nullptr, nullptr, true);
-                    compiler->gtDispTree(treeNode, nullptr, nullptr, true);
-                }
-                // assert(lastConsumedNode->gtSeqNum < treeNode->gtSeqNum);
-            }
-        }
-        lastConsumedNode = treeNode;
+        return;
     }
+
+    if (!operand->isContained() && !operand->IsCopyOrReload())
+    {
+        operand->gtUseNum = useNum;
+        useNum++;
+    }
+    else
+    {
+        for (GenTree* operand : operand->Operands())
+        {
+            genNumberOperandUse(operand, useNum);
+        }
+    }
+}
+
+void CodeGen::genCheckConsumeNode(GenTree* const node)
+{
+    assert(node != nullptr);
+
+    if (verbose)
+    {
+        if ((node->gtDebugFlags & GTF_DEBUG_NODE_CG_CONSUMED) != 0)
+        {
+            printf("Node was consumed twice:\n");
+            compiler->gtDispTree(node, nullptr, nullptr, true);
+        }
+        else if ((lastConsumedNode != nullptr) && (node->gtUseNum < lastConsumedNode->gtUseNum))
+        {
+            printf("Nodes were consumed out-of-order:\n");
+            compiler->gtDispTree(lastConsumedNode, nullptr, nullptr, true);
+            compiler->gtDispTree(node, nullptr, nullptr, true);
+        }
+    }
+
+    assert((node->OperGet() == GT_CATCH_ARG) || ((node->gtDebugFlags & GTF_DEBUG_NODE_CG_CONSUMED) == 0));
+    assert((lastConsumedNode == nullptr) || (node->gtUseNum == -1) || (node->gtUseNum > lastConsumedNode->gtUseNum));
+
+    node->gtDebugFlags |= GTF_DEBUG_NODE_CG_CONSUMED;
+    lastConsumedNode = node;
 }
 #endif // DEBUG
 
@@ -1167,21 +1213,15 @@ void CodeGen::genConsumeRegs(GenTree* tree)
     }
 #endif // !defined(_TARGET_64BIT_)
 
-    if (tree->isContained())
+    if (tree->isUsedFromSpillTemp())
     {
-        if (tree->isContainedSpillTemp())
-        {
-            // spill temps are un-tracked and hence no need to update life
-        }
-        else if (tree->isIndir())
+        // spill temps are un-tracked and hence no need to update life
+    }
+    else if (tree->isContained())
+    {
+        if (tree->isIndir())
         {
             genConsumeAddress(tree->AsIndir()->Addr());
-        }
-        else if (tree->OperGet() == GT_AND)
-        {
-            // This is the special contained GT_AND that we created in Lowering::TreeNodeInfoInitCmp()
-            // Now we need to consume the operands of the GT_AND node.
-            genConsumeOperands(tree->AsOp());
         }
 #ifdef _TARGET_XARCH_
         else if (tree->OperGet() == GT_LCL_VAR)
@@ -1695,43 +1735,73 @@ void CodeGen::genTransferRegGCState(regNumber dst, regNumber src)
 //     pass in 'addr' for a relative call or 'base' for a indirect register call
 //     methHnd - optional, only used for pretty printing
 //     retSize - emitter type of return for GC purposes, should be EA_BYREF, EA_GCREF, or EA_PTRSIZE(not GC)
+//
+// clang-format off
 void CodeGen::genEmitCall(int                   callType,
                           CORINFO_METHOD_HANDLE methHnd,
-                          INDEBUG_LDISASM_COMMA(CORINFO_SIG_INFO* sigInfo) void* addr X86_ARG(ssize_t argSize),
-                          emitAttr retSize MULTIREG_HAS_SECOND_GC_RET_ONLY_ARG(emitAttr secondRetSize),
-                          IL_OFFSETX ilOffset,
-                          regNumber  base,
-                          bool       isJump,
-                          bool       isNoGC)
+                          INDEBUG_LDISASM_COMMA(CORINFO_SIG_INFO* sigInfo)
+                          void*                 addr
+                          X86_ARG(ssize_t argSize),
+                          emitAttr              retSize
+                          MULTIREG_HAS_SECOND_GC_RET_ONLY_ARG(emitAttr secondRetSize),
+                          IL_OFFSETX            ilOffset,
+                          regNumber             base,
+                          bool                  isJump,
+                          bool                  isNoGC)
 {
 #if !defined(_TARGET_X86_)
     ssize_t argSize = 0;
 #endif // !defined(_TARGET_X86_)
-    getEmitter()->emitIns_Call(emitter::EmitCallType(callType), methHnd, INDEBUG_LDISASM_COMMA(sigInfo) addr, argSize,
-                               retSize MULTIREG_HAS_SECOND_GC_RET_ONLY_ARG(secondRetSize), gcInfo.gcVarPtrSetCur,
-                               gcInfo.gcRegGCrefSetCur, gcInfo.gcRegByrefSetCur, ilOffset, base, REG_NA, 0, 0, isJump,
+    getEmitter()->emitIns_Call(emitter::EmitCallType(callType),
+                               methHnd,
+                               INDEBUG_LDISASM_COMMA(sigInfo)
+                               addr,
+                               argSize,
+                               retSize
+                               MULTIREG_HAS_SECOND_GC_RET_ONLY_ARG(secondRetSize),
+                               gcInfo.gcVarPtrSetCur,
+                               gcInfo.gcRegGCrefSetCur,
+                               gcInfo.gcRegByrefSetCur,
+                               ilOffset, base, REG_NA, 0, 0, isJump,
                                emitter::emitNoGChelper(compiler->eeGetHelperNum(methHnd)));
 }
+// clang-format on
 
 // generates an indirect call via addressing mode (call []) given an indir node
 //     methHnd - optional, only used for pretty printing
 //     retSize - emitter type of return for GC purposes, should be EA_BYREF, EA_GCREF, or EA_PTRSIZE(not GC)
+//
+// clang-format off
 void CodeGen::genEmitCall(int                   callType,
                           CORINFO_METHOD_HANDLE methHnd,
-                          INDEBUG_LDISASM_COMMA(CORINFO_SIG_INFO* sigInfo) GenTreeIndir* indir X86_ARG(ssize_t argSize),
-                          emitAttr retSize MULTIREG_HAS_SECOND_GC_RET_ONLY_ARG(emitAttr secondRetSize),
-                          IL_OFFSETX ilOffset)
+                          INDEBUG_LDISASM_COMMA(CORINFO_SIG_INFO* sigInfo)
+                          GenTreeIndir*         indir
+                          X86_ARG(ssize_t argSize),
+                          emitAttr              retSize
+                          MULTIREG_HAS_SECOND_GC_RET_ONLY_ARG(emitAttr secondRetSize),
+                          IL_OFFSETX            ilOffset)
 {
 #if !defined(_TARGET_X86_)
     ssize_t argSize = 0;
 #endif // !defined(_TARGET_X86_)
     genConsumeAddress(indir->Addr());
 
-    getEmitter()->emitIns_Call(emitter::EmitCallType(callType), methHnd, INDEBUG_LDISASM_COMMA(sigInfo) nullptr,
-                               argSize, retSize MULTIREG_HAS_SECOND_GC_RET_ONLY_ARG(secondRetSize),
-                               gcInfo.gcVarPtrSetCur, gcInfo.gcRegGCrefSetCur, gcInfo.gcRegByrefSetCur, ilOffset,
-                               indir->Base() ? indir->Base()->gtRegNum : REG_NA,
-                               indir->Index() ? indir->Index()->gtRegNum : REG_NA, indir->Scale(), indir->Offset());
+    getEmitter()->emitIns_Call(emitter::EmitCallType(callType),
+                               methHnd,
+                               INDEBUG_LDISASM_COMMA(sigInfo)
+                               nullptr,
+                               argSize,
+                               retSize
+                               MULTIREG_HAS_SECOND_GC_RET_ONLY_ARG(secondRetSize),
+                               gcInfo.gcVarPtrSetCur,
+                               gcInfo.gcRegGCrefSetCur,
+                               gcInfo.gcRegByrefSetCur,
+                               ilOffset,
+                               (indir->Base()  != nullptr) ? indir->Base()->gtRegNum  : REG_NA,
+                               (indir->Index() != nullptr) ? indir->Index()->gtRegNum : REG_NA,
+                               indir->Scale(),
+                               indir->Offset());
 }
+// clang-format on
 
 #endif // !LEGACY_BACKEND
