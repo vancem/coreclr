@@ -1022,6 +1022,8 @@ namespace System
         {
             if (oldValue == null)
                 throw new ArgumentNullException(nameof(oldValue));
+            if (oldValue.Length == 0)
+                throw new ArgumentException(SR.Argument_StringZeroLength, nameof(oldValue));
 
             // If they asked to replace oldValue with a null, replace all occurences
             // with the empty string.
@@ -1234,7 +1236,7 @@ namespace System
 
             if ((count == 0) || (omitEmptyEntries && this.Length == 0))
             {
-                return EmptyArray<String>.Value;
+                return Array.Empty<String>();
             }
 
             if (count == 1)
@@ -1310,7 +1312,7 @@ namespace System
 
             if ((count == 0) || (omitEmptyEntries && this.Length == 0))
             {
-                return EmptyArray<String>.Value;
+                return Array.Empty<String>();
             }
 
             if (count == 1 || (singleSeparator && separator.Length == 0))

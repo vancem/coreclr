@@ -817,15 +817,18 @@ NESTED_ENTRY DelayLoad_MethodCall, _TEXT, NoHandler
 
     mov         esi, esp
 
+    #define STACK_ALIGN_PADDING 4
+    sub         esp, STACK_ALIGN_PADDING
+
     push        ecx
     push        edx
-
     push        eax
-
-    // pTransitionBlock
-    push        esi
-
+    push        esi // pTransitionBlock
+    CHECK_STACK_ALIGNMENT
     call        C_FUNC(ExternalMethodFixupWorker)
+
+    add         esp, STACK_ALIGN_PADDING
+    #undef STACK_ALIGN_PADDING
 
     // eax now contains replacement stub. PreStubWorker will never return
     // NULL (it throws an exception if stub creation fails.)
@@ -1174,12 +1177,28 @@ NESTED_ENTRY BackPatchWorkerAsmStub, _TEXT, NoHandler
     PROLOG_PUSH edx
     PROLOG_END
 
-    sub     esp, 4     //  for 16 bytes align
-    push    eax        //  push any indirect call address as the second arg to BackPatchWorker
-    push    [ebp+8]    //  and push return address as the first arg to BackPatchWorker
+    // Call BackPatchWorkerStaticStub
+    //
+    // Here is expected stack layout at this point:
+    //  | saved edx |
+    //  | saved ecx |
+    //  | saved eax |
+    //  +-----------+ <- ebp
+    //  | saved ebp |
+    //  | saved eip |
+    //  +-----------+ <- CFA of BackPatchWorkerAsmStub
+    //  | saved eip |
+    //  +-----------+ <- CFA of ResolveStub (16-byte aligned)
+    // (Please refer to ResolveStub in vm/i386/virtualcallstubcpu.hpp for details)
+    //
+    push    eax                       //  any indirect call address as the 2nd arg
+    push    DWORD PTR [ebp + 8]       //  return address (of ResolveStub) as the 1st arg
 
+    CHECK_STACK_ALIGNMENT
     call    C_FUNC(BackPatchWorkerStaticStub)
-    add     esp, 12
+
+    // Clean up arguments and alignment padding
+    add     esp, 2*4
 
     EPILOG_BEG
     EPILOG_POP edx

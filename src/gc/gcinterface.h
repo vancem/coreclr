@@ -169,12 +169,12 @@ struct segment_info
 
 class Object;
 class IGCHeap;
-class IGCHandleTable;
+class IGCHandleManager;
 
 // Initializes the garbage collector. Should only be called
 // once, during EE startup. Returns true if the initialization
 // was successful, false otherwise.
-bool InitializeGarbageCollector(IGCToCLR* clrToGC, IGCHeap** gcHeap, IGCHandleTable** gcHandleTable, GcDacVars* gcDacVars);
+bool InitializeGarbageCollector(IGCToCLR* clrToGC, IGCHeap** gcHeap, IGCHandleManager** gcHandleTable, GcDacVars* gcDacVars);
 
 // The runtime needs to know whether we're using workstation or server GC 
 // long before the GCHeap is created. This function sets the type of
@@ -402,24 +402,48 @@ typedef struct OBJECTHANDLE__* OBJECTHANDLE;
 typedef uintptr_t OBJECTHANDLE;
 #endif
 
-class IGCHandleTable {
+class IGCHandleStore {
+public:
+
+    virtual void Uproot() = 0;
+
+    virtual bool ContainsHandle(OBJECTHANDLE handle) = 0;
+
+    virtual OBJECTHANDLE CreateHandleOfType(Object* object, int type) = 0;
+
+    virtual OBJECTHANDLE CreateHandleOfType(Object* object, int type, int heapToAffinitizeTo) = 0;
+
+    virtual OBJECTHANDLE CreateHandleWithExtraInfo(Object* object, int type, void* pExtraInfo) = 0;
+
+    virtual OBJECTHANDLE CreateDependentHandle(Object* primary, Object* secondary) = 0;
+
+    virtual ~IGCHandleStore() {};
+};
+
+class IGCHandleManager {
 public:
 
     virtual bool Initialize() = 0;
 
     virtual void Shutdown() = 0;
 
-    virtual void* GetHandleTableContext(void* handleTable) = 0;
+    virtual void* GetHandleContext(OBJECTHANDLE handle) = 0;
 
-    virtual void* GetHandleTableForHandle(OBJECTHANDLE handle) = 0;
+    virtual IGCHandleStore* GetGlobalHandleStore() = 0;
 
-    virtual OBJECTHANDLE CreateHandleOfType(void* table, Object* object, int type) = 0;
+    virtual IGCHandleStore* CreateHandleStore(void* context) = 0;
 
-    virtual OBJECTHANDLE CreateHandleWithExtraInfo(void* table, Object* object, int type, void* pExtraInfo) = 0;
-
-    virtual OBJECTHANDLE CreateDependentHandle(void* table, Object* primary, Object* secondary) = 0;
+    virtual void DestroyHandleStore(IGCHandleStore* store) = 0;
 
     virtual OBJECTHANDLE CreateGlobalHandleOfType(Object* object, int type) = 0;
+
+    virtual OBJECTHANDLE CreateDuplicateHandle(OBJECTHANDLE handle) = 0;
+
+    virtual void DestroyHandleOfType(OBJECTHANDLE handle, int type) = 0;
+
+    virtual void DestroyHandleOfUnknownType(OBJECTHANDLE handle) = 0;
+
+    virtual void* GetExtraInfoFromHandle(OBJECTHANDLE handle) = 0;
 };
 
 // IGCHeap is the interface that the VM will use when interacting with the GC.
@@ -669,9 +693,11 @@ public:
     // background GC as the BGC threads also need to walk LOH.
     virtual void PublishObject(uint8_t* obj) = 0;
 
-    // Gets the event that suspended threads will use to wait for the
-    // end of a GC.
-    virtual CLREventStatic* GetWaitForGCEvent() = 0;
+    // Signals the WaitForGCEvent event, indicating that a GC has completed.
+    virtual void SetWaitForGCEvent() = 0;
+
+    // Resets the state of the WaitForGCEvent back to an unsignalled state.
+    virtual void ResetWaitForGCEvent() = 0;
 
     /*
     ===========================================================================
