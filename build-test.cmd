@@ -58,6 +58,7 @@ set __BuildAgainstPackagesArg=
 set __RuntimeId=
 set __ZipTests=
 set __TargetsWindows=1
+set __DoCrossgen=
 
 :Arg_Loop
 if "%1" == "" goto ArgsDone
@@ -76,10 +77,10 @@ if /i "%1" == "release"               (set __BuildType=Release&set processedArgs
 if /i "%1" == "checked"               (set __BuildType=Checked&set processedArgs=!processedArgs! %1&shift&goto Arg_Loop)
 
 if /i "%1" == "skipmanaged"           (set __SkipManaged=1&set processedArgs=!processedArgs! %1&shift&goto Arg_Loop)
-if /i "%1" == "updateinvalidpackages" (set __UpdateInvalidPackagesArg=1&set processedArgs=!processedArgs! %1&shift&goto Arg_Loop)
 if /i "%1" == "toolset_dir"           (set __ToolsetDir=%2&set __PassThroughArgs=%__PassThroughArgs% %2&set processedArgs=!processedArgs! %1 %2&shift&shift&goto Arg_Loop)
 if /i "%1" == "buildagainstpackages"  (set __ZipTests=1&set __BuildAgainstPackagesArg=-BuildTestsAgainstPackages&set processedArgs=!processedArgs! %1&shift&goto Arg_Loop)
 if /i "%1" == "ziptests"              (set __ZipTests=1&set processedArgs=!processedArgs! %1&shift&goto Arg_Loop)
+if /i "%1" == "crossgen"              (set __DoCrossgen=1&set processedArgs=!processedArgs! %1&shift&goto Arg_Loop)
 if /i "%1" == "runtimeid"             (set __RuntimeId=%2&set processedArgs=!processedArgs! %1 %2&shift&shift&goto Arg_Loop)
 if /i "%1" == "targetsNonWindows"     (set __TargetsWindows=0&set processedArgs=!processedArgs! %1&shift&goto Arg_Loop)
 if /i "%1" == "Exclude"               (set __Exclude=%2&set processedArgs=!processedArgs! %1 %2&shift&shift&goto Arg_Loop)
@@ -143,17 +144,6 @@ REM === Restore Build Tools
 REM ===
 REM =========================================================================================
 call "%__ProjectDir%\init-tools.cmd"
-
-REM =========================================================================================
-REM ===
-REM === Resolve runtime dependences
-REM ===
-REM =========================================================================================
-call "%__TestDir%\setup-runtime-dependencies.cmd" /arch %__BuildArch% /outputdir %__BinDir%
-
-if defined __UpdateInvalidPackagesArg (
-  goto skipnative
-)
 
 REM =========================================================================================
 REM ===
@@ -238,7 +228,7 @@ REM ============================================================================
 if not defined XunitTestBinBase       set  XunitTestBinBase=%__TestWorkingDir%
 set "CORE_ROOT=%XunitTestBinBase%\Tests\Core_Root"
 
-call "%__ProjectDir%\run.cmd" build -Project=%__ProjectDir%\tests\build.proj  -UpdateDependencies -BatchRestorePackages -MsBuildLog=!__msbuildLog! -MsBuildWrn=!__msbuildWrn! -MsBuildErr=!__msbuildErr! %__RunArgs% %__BuildAgainstPackagesArg% %__unprocessedBuildArgs%
+call "%__ProjectDir%\run.cmd" build -Project=%__ProjectDir%\tests\build.proj -BatchRestorePackages -MsBuildLog=!__msbuildLog! -MsBuildWrn=!__msbuildWrn! -MsBuildErr=!__msbuildErr! %__RunArgs% %__BuildAgainstPackagesArg% %__unprocessedBuildArgs%
 
 set __BuildLogRootName=Tests_GenerateRuntimeLayout
 
@@ -275,11 +265,7 @@ if not defined VSINSTALLDIR (
     exit /b 1
 )
 
-if defined __UpdateInvalidPackagesArg (
-  set __up=-updateinvalidpackageversions
-)
-
-call "%__ProjectDir%\run.cmd" build -Project=%__ProjectDir%\tests\build.proj -MsBuildLog=!__msbuildLog! -MsBuildWrn=!__msbuildWrn! -MsBuildErr=!__msbuildErr! %__up% %__RunArgs% %__BuildAgainstPackagesArg% %__unprocessedBuildArgs%
+call "%__ProjectDir%\run.cmd" build -Project=%__ProjectDir%\tests\build.proj -MsBuildLog=!__msbuildLog! -MsBuildWrn=!__msbuildWrn! -MsBuildErr=!__msbuildErr! %__RunArgs% %__BuildAgainstPackagesArg% %__unprocessedBuildArgs%
 if errorlevel 1 (
     echo %__MsgPrefix%Error: build failed. Refer to the build log files for details:
     echo     %__BuildLog%
@@ -295,9 +281,13 @@ REM Cleans up any lock folder used for synchronization from last run
 powershell "Get-ChildItem -path %__TestWorkingDir% -Include 'lock' -Recurse -Force |  where {$_.Attributes -eq 'Directory'}| Remove-Item -force -Recurse"
 
 set CORE_ROOT=%__TestBinDir%\Tests\Core_Root
+set CORE_ROOT_STAGE=%__TestBinDir%\Tests\Core_Root_Stage
 if exist "%CORE_ROOT%" rd /s /q "%CORE_ROOT%"
+if exist "%CORE_ROOT_STAGE%" rd /s /q "%CORE_ROOT_STAGE%"
 md "%CORE_ROOT%"
-xcopy /s "%__BinDir%" "%CORE_ROOT%"
+md "%CORE_ROOT_STAGE%"
+xcopy /s "%__BinDir%" "%CORE_ROOT_STAGE%"
+
 
 if defined __BuildAgainstPackagesArg ( 
   if "%__TargetsWindows%"=="0" (
@@ -307,8 +297,8 @@ if defined __BuildAgainstPackagesArg (
         exit /b 1
     )
 
-    for /R %__PackagesDir%\TestNativeBins\%__RuntimeId%\%__BuildType% %%f in (*.so) do copy %%f %CORE_ROOT%
-    for /R %__PackagesDir%\TestNativeBins\%__RuntimeId%\%__BuildType% %%f in (*.dylib) do copy %%f %CORE_ROOT%
+    for /R %__PackagesDir%\TestNativeBins\%__RuntimeId%\%__BuildType% %%f in (*.so) do copy %%f %CORE_ROOT_STAGE%
+    for /R %__PackagesDir%\TestNativeBins\%__RuntimeId%\%__BuildType% %%f in (*.dylib) do copy %%f %CORE_ROOT_STAGE%
   )
 )
 
@@ -335,7 +325,7 @@ set __msbuildLog=/flp:Verbosity=normal;LogFile="%__BuildLog%"
 set __msbuildWrn=/flp1:WarningsOnly;LogFile="%__BuildWrn%"
 set __msbuildErr=/flp2:ErrorsOnly;LogFile="%__BuildErr%"
 
-call %__ProjectDir%\run.cmd build -Project=%__ProjectDir%\tests\runtest.proj -BuildWrappers -MsBuildEventLogging=" " -MsBuildLog=!__msbuildLog! -MsBuildWrn=!__msbuildWrn! -MsBuildErr=!__msbuildErr! %__RunArgs% %__BuildAgainstPackagesArg% %__unprocessedBuildArgs% %TargetsWindowsArg%
+call %__ProjectDir%\run.cmd build -Project=%__ProjectDir%\tests\runtest.proj -BuildWrappers -MsBuildEventLogging=" " -MsBuildLog=!__msbuildLog! -MsBuildWrn=!__msbuildWrn! -MsBuildErr=!__msbuildErr! %__RunArgs% %__BuildAgainstPackagesArg% %TargetsWindowsArg% %__unprocessedBuildArgs%
 if errorlevel 1 (
     echo Xunit Wrapper build failed
     exit /b 1
@@ -360,6 +350,20 @@ if errorlevel 1 (
     exit /b 1
 )
 
+xcopy /s /y "%CORE_ROOT_STAGE%" "%CORE_ROOT%"
+
+set __CrossgenArg = ""
+if defined __DoCrossgen (
+  set __CrossgenArg="-Crossgen"
+  if "%__TargetsWindows%" == "1" (
+    call :PrecompileFX
+  ) else (
+    echo "%__MsgPrefix% Crossgen only supported on Windows, for now"
+  )
+)
+
+rd /s /q "%CORE_ROOT_STAGE%"
+
 if not defined __ZipTests goto SkipPrepForPublish
 
 set __BuildLogRootName=Helix_Prep
@@ -376,7 +380,14 @@ REM === Prep test binaries for Helix publishing
 REM ===
 REM =========================================================================================
 
-call %__ProjectDir%\run.cmd build -Project=%__ProjectDir%\tests\helixprep.proj  -MsBuildLog=!__msbuildLog! -MsBuildWrn=!__msbuildWrn! -MsBuildErr=!__msbuildErr! %__RunArgs% %__BuildAgainstPackagesArg% %__unprocessedBuildArgs% %RuntimeIdArg% %TargetsWindowsArg%
+call %__ProjectDir%\run.cmd build -Project=%__ProjectDir%\tests\helixprep.proj  -MsBuildLog=!__msbuildLog! -MsBuildWrn=!__msbuildWrn! -MsBuildErr=!__msbuildErr! %__RunArgs% %__BuildAgainstPackagesArg% %RuntimeIdArg% %TargetsWindowsArg% %__CrossgenArg% %__unprocessedBuildArgs%
+if errorlevel 1 (
+    echo %__MsgPrefix%Error: build failed. Refer to the build log files for details:
+    echo     %__BuildLog%
+    echo     %__BuildWrn%
+    echo     %__BuildErr%
+    exit /b 1
+)
 
 echo %__MsgPrefix% Prepped test binaries for publishing
 
@@ -401,7 +412,6 @@ echo.
 echo. -? -h -help: view this message.
 echo Build architecture: -buildArch: only x64 is currently allowed ^(default: x64^).
 echo Build type: -buildType: one of Debug, Checked, Release ^(default: Debug^).
-echo updateinvalidpackageversions: Runs the target to update package versions.
 echo buildagainstpackages: builds tests against restored packages, instead of against a built product.
 echo runtimeid ^<ID^>: Builds a test overlay for the specified OS (Only supported when building against packages). Supported IDs are:
 echo     alpine.3.4.3-x64: Builds overlay for Alpine 3.4.3
@@ -418,6 +428,7 @@ echo     ubuntu.16.10-x64: Builds overlay for Ubuntu 16.10
 echo     win-x64: Builds overlay for portable Windows
 echo     win7-x64: Builds overlay for Windows 7
 echo ziptests: zips CoreCLR tests & Core_Root for a Helix run
+echo crossgen: Precompiles the framework managed assemblies
 echo Exclude- Optional parameter - specify location of default exclusion file (defaults to tests\issues.targets if not specified)
 echo     Set to "" to disable default exclusion file.
 echo -- ... : all arguments following this tag will be passed directly to msbuild.
@@ -427,7 +438,6 @@ echo     1: Build all tests with priority 0 and 1
 echo     666: Build all tests with priority 0, 1 ... 666
 echo -sequential: force a non-parallel build ^(default is to build in parallel
 echo     using all processors^).
-echo -ilasmroundtrip: enables ilasm round trip build and run of the tests before executing them.
 echo -verbose: enables detailed file logging for the msbuild tasks into the msbuild log file.
 exit /b 1
 
@@ -452,6 +462,11 @@ if /i "%__ToolsetDir%" == "" (
     exit /b 1
 )
 
+if not exist "%__ToolsetDir%"\buildenv_arm64.cmd goto :Not_EWDK
+call "%__ToolsetDir%"\buildenv_arm64.cmd
+exit /b 0
+
+:Not_EWDK
 set PATH=%__ToolsetDir%\VC_sdk\bin;%PATH%
 set LIB=%__ToolsetDir%\VC_sdk\lib\arm64;%__ToolsetDir%\sdpublic\sdk\lib\arm64
 set INCLUDE=^
@@ -465,4 +480,36 @@ set INCLUDE=^
 %__ToolsetDir%\sdpublic\sdk\inc\abi;^
 %__ToolsetDir%\sdpublic\sdk\inc\clientcore;^
 %__ToolsetDir%\diasdk\include
+exit /b 0
+
+:PrecompileFX
+for %%F in (%CORE_ROOT%\*.dll) do call :PrecompileAssembly "%%F" %%~nF%%~xF
+exit /b 0
+
+REM Compile the managed assemblies in Core_ROOT before running the tests
+:PrecompileAssembly
+
+REM Skip mscorlib since it is already precompiled.
+if /I "%2" == "mscorlib.dll" exit /b 0
+if /I "%2" == "mscorlib.ni.dll" exit /b 0
+REM don't precompile anything from CoreCLR
+if /I exist %CORE_ROOT_STAGE%\%2 exit /b 0
+
+"%CORE_ROOT_STAGE%\crossgen.exe" /Platform_Assemblies_Paths "%CORE_ROOT%" /in "%1" /out "%CORE_ROOT%/temp.ni.dll" >nul 2>nul
+set /a __exitCode = %errorlevel%
+if "%__exitCode%" == "-2146230517" (
+    echo %2 is not a managed assembly.
+    exit /b 0
+)
+
+if %__exitCode% neq 0 (
+    echo Unable to precompile %2
+    exit /b 0
+)
+
+:: Delete original .dll & replace it with the Crossgened .dll
+del %1
+ren "%CORE_ROOT%\temp.ni.dll" %2
+    
+echo Successfully precompiled %2
 exit /b 0

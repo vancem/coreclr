@@ -30,7 +30,6 @@ using System.Reflection;
 
 namespace System.IO
 {
-    [Serializable]
     public abstract class Stream : MarshalByRefObject, IDisposable
     {
         public static readonly Stream Null = new NullStream();
@@ -522,14 +521,14 @@ namespace System.IO
             // If the wait has already completed, run the task.
             if (asyncWaiter.IsCompleted)
             {
-                Debug.Assert(asyncWaiter.IsRanToCompletion, "The semaphore wait should always complete successfully.");
+                Debug.Assert(asyncWaiter.IsCompletedSuccessfully, "The semaphore wait should always complete successfully.");
                 RunReadWriteTask(readWriteTask);
             }
             else  // Otherwise, wait for our turn, and then run the task.
             {
                 asyncWaiter.ContinueWith((t, state) =>
                 {
-                    Debug.Assert(t.IsRanToCompletion, "The semaphore wait should always complete successfully.");
+                    Debug.Assert(t.IsCompletedSuccessfully, "The semaphore wait should always complete successfully.");
                     var rwt = (ReadWriteTask)state;
                     rwt._stream.RunReadWriteTask(rwt); // RunReadWriteTask(readWriteTask);
                 }, readWriteTask, default(CancellationToken), TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
@@ -854,7 +853,6 @@ namespace System.IO
             SynchronousAsyncResult.EndWrite(asyncResult);
         }
 
-        [Serializable]
         private sealed class NullStream : Stream
         {
             internal NullStream() { }
@@ -1093,7 +1091,6 @@ namespace System.IO
 
         // SyncStream is a wrapper around a stream that takes 
         // a lock for every operation making it thread safe.
-        [Serializable]
         internal sealed class SyncStream : Stream, IDisposable
         {
             private Stream _stream;

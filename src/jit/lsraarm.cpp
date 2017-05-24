@@ -229,8 +229,6 @@ void Lowering::TreeNodeInfoInit(GenTree* tree)
     JITDUMP("TreeNodeInfoInit for: ");
     DISPNODE(tree);
 
-    NYI_IF(tree->TypeGet() == TYP_DOUBLE, "lowering double");
-
     switch (tree->OperGet())
     {
         GenTree* op1;
@@ -238,7 +236,7 @@ void Lowering::TreeNodeInfoInit(GenTree* tree)
 
         case GT_STORE_LCL_FLD:
         case GT_STORE_LCL_VAR:
-            if (tree->gtGetOp1()->OperGet() == GT_LONG)
+            if (varTypeIsLong(tree->gtGetOp1()))
             {
                 info->srcCount = 2;
             }
@@ -320,6 +318,14 @@ void Lowering::TreeNodeInfoInit(GenTree* tree)
             {
                 noway_assert(castOp->OperGet() == GT_LONG);
                 info->srcCount = 2;
+            }
+
+            // FloatToIntCast needs a temporary register
+            if (varTypeIsFloating(castOpType) && varTypeIsIntOrI(tree))
+            {
+                info->setInternalCandidates(m_lsra, RBM_ALLFLOAT);
+                info->internalFloatCount     = 1;
+                info->isInternalRegDelayFree = true;
             }
 
             CastInfo castInfo;
@@ -444,7 +450,8 @@ void Lowering::TreeNodeInfoInit(GenTree* tree)
             if (tree->gtOverflow())
             {
                 // Need a register different from target reg to check for overflow.
-                info->internalIntCount = 1;
+                info->internalIntCount       = 1;
+                info->isInternalRegDelayFree = true;
             }
             __fallthrough;
 
@@ -456,6 +463,11 @@ void Lowering::TreeNodeInfoInit(GenTree* tree)
             info->dstCount = 1;
         }
         break;
+
+        case GT_MUL_LONG:
+            info->srcCount = 2;
+            info->dstCount = 2;
+            break;
 
         case GT_LIST:
         case GT_FIELD_LIST:
@@ -541,14 +553,10 @@ void Lowering::TreeNodeInfoInit(GenTree* tree)
             break;
 
         case GT_ARR_INDEX:
-            info->srcCount = 2;
-            info->dstCount = 1;
-
-            // We need one internal register when generating code for GT_ARR_INDEX, however the
-            // register allocator always may just give us the same one as it gives us for the 'dst'
-            // as a workaround we will just ask for two internal registers.
-            //
-            info->internalIntCount = 2;
+            info->srcCount               = 2;
+            info->dstCount               = 1;
+            info->internalIntCount       = 1;
+            info->isInternalRegDelayFree = true;
 
             // For GT_ARR_INDEX, the lifetime of the arrObj must be extended because it is actually used multiple
             // times while the result is being computed.
@@ -634,6 +642,12 @@ void Lowering::TreeNodeInfoInit(GenTree* tree)
             TreeNodeInfoInitCmp(tree);
             break;
 
+        case GT_CKFINITE:
+            info->srcCount         = 1;
+            info->dstCount         = 1;
+            info->internalIntCount = 1;
+            break;
+
         case GT_CALL:
             TreeNodeInfoInitCall(tree->AsCall());
             break;
@@ -643,6 +657,12 @@ void Lowering::TreeNodeInfoInit(GenTree* tree)
         case GT_STORE_DYN_BLK:
             LowerBlockStore(tree->AsBlk());
             TreeNodeInfoInitBlockStore(tree->AsBlk());
+            break;
+
+        case GT_INIT_VAL:
+            // Always a passthrough of its child's value.
+            info->srcCount = 0;
+            info->dstCount = 0;
             break;
 
         case GT_LCLHEAP:
@@ -720,6 +740,7 @@ void Lowering::TreeNodeInfoInit(GenTree* tree)
         case GT_PINVOKE_PROLOG:
         case GT_JCC:
         case GT_MEMORYBARRIER:
+        case GT_OBJ:
             info->dstCount = tree->IsValue() ? 1 : 0;
             if (kind & (GTK_CONST | GTK_LEAF))
             {
@@ -744,7 +765,7 @@ void Lowering::TreeNodeInfoInit(GenTree* tree)
     } // end switch (tree->OperGet())
 
     // We need to be sure that we've set info->srcCount and info->dstCount appropriately
-    assert((info->dstCount < 2) || tree->IsMultiRegCall());
+    assert((info->dstCount < 2) || tree->IsMultiRegNode());
 }
 
 #endif // _TARGET_ARM_

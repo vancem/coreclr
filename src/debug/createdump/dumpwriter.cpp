@@ -4,13 +4,11 @@
 
 #include "createdump.h"
 
-DumpWriter::DumpWriter(DataTarget& dataTarget, CrashInfo& crashInfo) :
+DumpWriter::DumpWriter(CrashInfo& crashInfo) :
     m_ref(1),
     m_fd(-1),
-    m_dataTarget(dataTarget),
     m_crashInfo(crashInfo)
 {
-    m_dataTarget.AddRef();
     m_crashInfo.AddRef();
 }
 
@@ -21,7 +19,6 @@ DumpWriter::~DumpWriter()
         close(m_fd);
         m_fd = -1;
     }
-    m_dataTarget.Release();
     m_crashInfo.Release();
 }
 
@@ -62,7 +59,7 @@ DumpWriter::Release()
 }
 
 bool
-DumpWriter::OpenDump(char* dumpFileName)
+DumpWriter::OpenDump(const char* dumpFileName)
 {
     m_fd = open(dumpFileName, O_WRONLY|O_CREAT|O_TRUNC, 0664);
     if (m_fd == -1)
@@ -70,7 +67,6 @@ DumpWriter::OpenDump(char* dumpFileName)
         fprintf(stderr, "Could not open output %s: %s\n", dumpFileName, strerror(errno));
         return false;
     }
-    printf("Writing core file %s\n", dumpFileName);
     return true;
 }
 
@@ -175,7 +171,7 @@ DumpWriter::WriteDump()
     }
     offset += finalNoteAlignment;
 
-    printf("Writing memory region headers to core file\n");
+    TRACE("Writing memory region headers to core file\n");
 
     // Write memory region note headers
     for (const MemoryRegion& memoryRegion : m_crashInfo.MemoryRegions())
@@ -208,12 +204,12 @@ DumpWriter::WriteDump()
         return false;
     }
 
-    printf("Writing %ld thread entries to core file\n", m_crashInfo.Threads().size());
+    TRACE("Writing %ld thread entries to core file\n", m_crashInfo.Threads().size());
 
     // Write all the thread's state and registers
     for (const ThreadInfo* thread : m_crashInfo.Threads()) 
     {
-        if (!WriteThread(*thread, 0)) {
+        if (!WriteThread(*thread, SIGABRT)) {
             return false;
         }
     }
@@ -228,20 +224,22 @@ DumpWriter::WriteDump()
         }
     }
 
-    printf("Writing %ld memory regions to core file\n", m_crashInfo.MemoryRegions().size());
+    TRACE("Writing %ld memory regions to core file\n", m_crashInfo.MemoryRegions().size());
 
     // Read from target process and write memory regions to core
+    uint64_t total = 0;
     for (const MemoryRegion& memoryRegion : m_crashInfo.MemoryRegions())
     {
         uint32_t size = memoryRegion.Size();
         uint64_t address = memoryRegion.StartAddress();
+        total += size;
 
         while (size > 0)
         {
             uint32_t bytesToRead = std::min(size, (uint32_t)sizeof(m_tempBuffer));
             uint32_t read = 0;
 
-            if (FAILED(m_dataTarget.ReadVirtual(address, m_tempBuffer, bytesToRead, &read))) {
+            if (FAILED(m_crashInfo.DataTarget()->ReadVirtual(address, m_tempBuffer, bytesToRead, &read))) {
                 fprintf(stderr, "ReadVirtual(%016lx, %08x) FAILED\n", address, bytesToRead);
                 return false;
             }
@@ -254,6 +252,8 @@ DumpWriter::WriteDump()
             size -= read;
         }
     }
+
+    printf("Written %ld bytes (%ld pages) to core file\n", total, total >> PAGE_SHIFT);
 
     return true;
 }
@@ -275,7 +275,7 @@ DumpWriter::WriteProcessInfo()
     nhdr.n_descsz = sizeof(prpsinfo_t);
     nhdr.n_type = NT_PRPSINFO;
 
-    printf("Writing process information to core file\n");
+    TRACE("Writing process information to core file\n");
 
     // Write process info data to core file
     if (!WriteData(&nhdr, sizeof(nhdr)) ||
@@ -295,7 +295,7 @@ DumpWriter::WriteAuxv()
     nhdr.n_descsz = m_crashInfo.GetAuxvSize();
     nhdr.n_type = NT_AUXV;
 
-    printf("Writing %ld auxv entries to core file\n", m_crashInfo.AuxvEntries().size());
+    TRACE("Writing %ld auxv entries to core file\n", m_crashInfo.AuxvEntries().size());
 
     if (!WriteData(&nhdr, sizeof(nhdr)) ||
         !WriteData("CORE\0AUX", 8)) { 
@@ -373,7 +373,7 @@ DumpWriter::WriteNTFileInfo()
     size_t count = m_crashInfo.ModuleMappings().size();
     size_t pageSize = PAGE_SIZE;
 
-    printf("Writing %ld NT_FILE entries to core file\n", m_crashInfo.ModuleMappings().size());
+    TRACE("Writing %ld NT_FILE entries to core file\n", m_crashInfo.ModuleMappings().size());
 
     if (!WriteData(&nhdr, sizeof(nhdr)) ||
         !WriteData("CORE\0FIL", 8) ||

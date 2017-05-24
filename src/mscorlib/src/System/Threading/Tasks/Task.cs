@@ -1467,8 +1467,7 @@ namespace System.Threading.Tasks
             return (flags & TASK_STATE_COMPLETED_MASK) != 0;
         }
 
-        // For use in InternalWait -- marginally faster than (Task.Status == TaskStatus.RanToCompletion)
-        internal bool IsRanToCompletion
+        public bool IsCompletedSuccessfully
         {
             get { return (m_stateFlags & TASK_STATE_COMPLETED_MASK) == TASK_STATE_RAN_TO_COMPLETION; }
         }
@@ -6255,7 +6254,6 @@ namespace System.Threading.Tasks
     // NOTE: These options are a subset of TaskContinuationsOptions, thus before adding a flag check it is
     // not already in use.
     [Flags]
-    [Serializable]
     public enum TaskCreationOptions
     {
         /// <summary>
@@ -6307,7 +6305,6 @@ namespace System.Threading.Tasks
     /// Task creation flags which are only used internally.
     /// </summary>
     [Flags]
-    [Serializable]
     internal enum InternalTaskOptions
     {
         /// <summary> Specifies "No internal task options" </summary>
@@ -6339,7 +6336,6 @@ namespace System.Threading.Tasks
     /// Specifies flags that control optional behavior for the creation and execution of continuation tasks.
     /// </summary>
     [Flags]
-    [Serializable]
     public enum TaskContinuationOptions
     {
         /// <summary>
