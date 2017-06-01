@@ -751,13 +751,12 @@ void CodeGen::genPutArgStk(GenTreePutArgStk* treeNode)
                 if (varNode != nullptr)
                 {
                     // Load from our varNumImp source
-                    emit->emitIns_R_S(INS_ldr, emitTypeSize(type), loReg, varNumInp, 0);
+                    emit->emitIns_R_S(INS_ldr, emitTypeSize(type), loReg, varNumInp, structOffset);
                 }
                 else
                 {
                     // check for case of destroying the addrRegister while we still need it
-                    assert(loReg != addrReg);
-                    noway_assert(remainingSize == TARGET_POINTER_SIZE);
+                    assert(loReg != addrReg || remainingSize == TARGET_POINTER_SIZE);
 
                     // Load from our address expression source
                     emit->emitIns_R_R_I(INS_ldr, emitTypeSize(type), loReg, addrReg, structOffset);
@@ -1344,8 +1343,13 @@ void CodeGen::genCodeForIndir(GenTreeIndir* tree)
 
     if (tree->gtFlags & GTF_IND_VOLATILE)
     {
+#ifdef _TARGET_ARM64_
+        // issue a INS_BARRIER_LD after a volatile LdInd operation
+        instGen_MemoryBarrier(INS_BARRIER_LD);
+#else
         // issue a full memory barrier after a volatile LdInd operation
         instGen_MemoryBarrier();
+#endif // _TARGET_ARM64_
     }
 }
 
@@ -1371,7 +1375,7 @@ void CodeGen::genCodeForCpBlk(GenTreeBlk* cpBlkNode)
 
     if (cpBlkNode->gtFlags & GTF_BLK_VOLATILE)
     {
-        // issue a full memory barrier before & after a volatile CpBlkUnroll operation
+        // issue a full memory barrier before a volatile CpBlk operation
         instGen_MemoryBarrier();
     }
 
@@ -1379,8 +1383,13 @@ void CodeGen::genCodeForCpBlk(GenTreeBlk* cpBlkNode)
 
     if (cpBlkNode->gtFlags & GTF_BLK_VOLATILE)
     {
-        // issue a full memory barrier before & after a volatile CpBlkUnroll operation
+#ifdef _TARGET_ARM64_
+        // issue a INS_BARRIER_ISHLD after a volatile CpBlk operation
+        instGen_MemoryBarrier(INS_BARRIER_ISHLD);
+#else
+        // issue a full memory barrier after a volatile CpBlk operation
         instGen_MemoryBarrier();
+#endif // _TARGET_ARM64_
     }
 }
 
@@ -1542,6 +1551,14 @@ void CodeGen::genCallInstruction(GenTreeCall* call)
                 }
 
                 argReg = genRegArgNext(argReg);
+
+#if defined(_TARGET_ARM_)
+                // A double register is modelled as an even-numbered single one
+                if (putArgRegNode->TypeGet() == TYP_DOUBLE)
+                {
+                    argReg = genRegArgNext(argReg);
+                }
+#endif // _TARGET_ARM_
             }
         }
         else
