@@ -1816,6 +1816,14 @@ void EncodeTypeInDictionarySignature(
 
         return;
     }
+    else if((CorElementTypeZapSig)typ == ELEMENT_TYPE_NATIVE_ARRAY_TEMPLATE_ZAPSIG)
+    {
+        pSigBuilder->AppendElementType((CorElementType)ELEMENT_TYPE_NATIVE_ARRAY_TEMPLATE_ZAPSIG);
+
+        IfFailThrow(ptr.GetElemType(&typ));
+
+        _ASSERTE(typ == ELEMENT_TYPE_SZARRAY || typ == ELEMENT_TYPE_ARRAY);
+    }
 
     pSigBuilder->AppendElementType(typ);
 
@@ -6838,10 +6846,20 @@ void CEEPreloader::Error(mdToken token, Exception * pException)
 {
     STANDARD_VM_CONTRACT;
 
+    HRESULT hr = pException->GetHR();
+    UINT    resID = 0;
+
     StackSString msg;
 
 #ifdef CROSSGEN_COMPILE
     pException->GetMessage(msg);
+
+    // Do we have an EEException with a resID?
+    if (EEMessageException::IsEEMessageException(pException))
+    {
+        EEMessageException * pEEMessageException = (EEMessageException *) pException;
+        resID = pEEMessageException->GetResID();
+    }
 #else
     {
         GCX_COOP();
@@ -6860,7 +6878,7 @@ void CEEPreloader::Error(mdToken token, Exception * pException)
     }
 #endif
     
-    m_pData->Error(token, pException->GetHR(), msg.GetUnicode());
+    m_pData->Error(token, hr, resID, msg.GetUnicode());
 }
 
 CEEInfo *g_pCEEInfo = NULL;

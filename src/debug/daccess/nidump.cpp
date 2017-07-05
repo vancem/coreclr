@@ -685,7 +685,7 @@ NativeImageDumper::DumpNativeImage()
          * I don't understand this.  Sections start on a two page boundary, but
          * data ends on a one page boundary.  What's up with that?
          */
-        m_sectionAlignment = PAGE_SIZE; //ntHeaders->OptionalHeader.SectionAlignment;
+        m_sectionAlignment = GetOsPageSize(); //ntHeaders->OptionalHeader.SectionAlignment;
         unsigned ntHeaderSize = sizeof(*ntHeaders)
             - sizeof(ntHeaders->OptionalHeader)
             + ntHeaders->FileHeader.SizeOfOptionalHeader;
@@ -4470,14 +4470,14 @@ void NativeImageDumper::TraverseNgenHash(DPTR(HASH_CLASS) pTable,
     }
 
     DisplayWriteFieldPointer(m_pModule,
-                             DPtrToPreferredAddr(pTable->m_pModule),
+                             DPtrToPreferredAddr(pTable->GetModule()),
                              HASH_CLASS, MODULE);
 
     // Dump warm (volatile) entries.
     DisplayWriteFieldUInt(m_cWarmEntries, pTable->m_cWarmEntries, HASH_CLASS, MODULE);
     DisplayWriteFieldUInt(m_cWarmBuckets, pTable->m_cWarmBuckets, HASH_CLASS, MODULE);
     DisplayWriteFieldAddress(m_pWarmBuckets,
-                             DPtrToPreferredAddr(pTable->m_pWarmBuckets),
+                             DPtrToPreferredAddr(pTable->GetWarmBuckets()),
                              sizeof(HASH_ENTRY_CLASS*) * pTable->m_cWarmBuckets,
                              HASH_CLASS, MODULE);
 
@@ -4513,11 +4513,11 @@ void NativeImageDumper::TraverseNgenPersistedEntries(DPTR(HASH_CLASS) pTable,
     DisplayWriteFieldUInt(m_cEntries, pEntries->m_cEntries, typename HASH_CLASS::PersistedEntries, MODULE);
     DisplayWriteFieldUInt(m_cBuckets, pEntries->m_cBuckets, typename HASH_CLASS::PersistedEntries, MODULE);
     DisplayWriteFieldAddress(m_pBuckets,
-                             DPtrToPreferredAddr(pEntries->m_pBuckets),
-                             pEntries->m_cBuckets ? pEntries->m_pBuckets->GetSize(pEntries->m_cBuckets) : 0,
+                             DPtrToPreferredAddr(pTable->GetPersistedBuckets(pEntries)),
+                             pEntries->m_cBuckets ? pTable->GetPersistedBuckets(pEntries)->GetSize(pEntries->m_cBuckets) : 0,
                              typename HASH_CLASS::PersistedEntries, MODULE);
     DisplayWriteFieldAddress(m_pEntries,
-                             DPtrToPreferredAddr(pEntries->m_pEntries),
+                             DPtrToPreferredAddr(pTable->GetPersistedEntries(pEntries)),
                              sizeof(typename HASH_CLASS::PersistedEntry) * pEntries->m_cEntries,
                              typename HASH_CLASS::PersistedEntries, MODULE);
 
@@ -4529,7 +4529,7 @@ void NativeImageDumper::TraverseNgenPersistedEntries(DPTR(HASH_CLASS) pTable,
     {
         // Get index of the first entry and the count of entries in the bucket.
         DWORD dwEntryId, cEntries;
-        pEntries->m_pBuckets->GetBucket(i, &dwEntryId, &cEntries);
+        pTable->GetPersistedBuckets(pEntries)->GetBucket(i, &dwEntryId, &cEntries);
 
         // Loop over entries.
         while (cEntries && (CHECK_OPT(SLIM_MODULE_TBLS)
@@ -4537,7 +4537,7 @@ void NativeImageDumper::TraverseNgenPersistedEntries(DPTR(HASH_CLASS) pTable,
                             || CHECK_OPT(METHODTABLES)))
         {
             // Lookup entry in the array via the index we have.
-            typename HASH_CLASS::PTR_PersistedEntry pEntry(PTR_TO_TADDR(pEntries->m_pEntries) +
+            typename HASH_CLASS::PTR_PersistedEntry pEntry(PTR_TO_TADDR(pTable->GetPersistedEntries(pEntries)) +
                                                         (dwEntryId * sizeof(typename HASH_CLASS::PersistedEntry)));
 
             IF_OPT(SLIM_MODULE_TBLS)
@@ -4745,7 +4745,7 @@ void NativeImageDumper::TraverseTypeHashEntry(void *pContext, PTR_EETypeHashEntr
              * all that much harm here (bloats m_discoveredMTs though,
              * but not by a huge amount.
              */
-            PTR_MethodTable mt(ptd->m_TemplateMT.GetValue());
+            PTR_MethodTable mt(ptd->GetTemplateMethodTableInternal());
             if (isInRange(PTR_TO_TADDR(mt)))
             {
                 m_discoveredMTs.AppendEx(mt);
@@ -6201,7 +6201,7 @@ void NativeImageDumper::TypeDescToString( PTR_TypeDesc td, SString& buf )
         if( td->IsArray()  )
         {
             //td->HasTypeParam() may also be true.
-            PTR_MethodTable mt = ptd->m_TemplateMT.GetValue();
+            PTR_MethodTable mt = ptd->GetTemplateMethodTableInternal();
             _ASSERTE( PTR_TO_TADDR(mt) );
             if( CORCOMPILE_IS_POINTER_TAGGED(PTR_TO_TADDR(mt)) )
             {
@@ -7905,7 +7905,7 @@ void NativeImageDumper::DumpMethodDesc( PTR_MethodDesc md, PTR_Module module )
         if( !CHECK_OPT(METHODDESCS) )
             CoverageReadString( dac_cast<TADDR>(ndmd->GetLibNameRaw()) );
 
-        PTR_NDirectWriteableData wnd( nd->m_pWriteableData );
+        PTR_NDirectWriteableData wnd( ndmd->GetWriteableData() );
         DisplayStartStructureWithOffset( m_pWriteableData,
                                          DPtrToPreferredAddr(wnd),
                                          sizeof(*wnd),
@@ -8061,7 +8061,7 @@ void NativeImageDumper::DumpMethodDesc( PTR_MethodDesc md, PTR_Module module )
         }
         //now handle the contents of the m_pMethInst/m_pPerInstInfo union.
         unsigned numSlots = imd->m_wNumGenericArgs;
-        PTR_Dictionary inst(imd->m_pPerInstInfo);
+        PTR_Dictionary inst(imd->IMD_GetMethodDictionary());
         unsigned dictSize;
         if( kind == InstantiatedMethodDesc::SharedMethodInstantiation )
         {
@@ -8255,7 +8255,7 @@ NativeImageDumper::DumpEEClassForMethodTable( PTR_MethodTable mt )
                            EEClass, EECLASSES );
 #endif
 
-    WriteFieldMethodTable( m_pMethodTable, clazz->m_pMethodTable, EEClass,
+    WriteFieldMethodTable( m_pMethodTable, clazz->GetMethodTable(), EEClass,
                            EECLASSES );
 
     WriteFieldCorElementType( m_NormType, (CorElementType)clazz->m_NormType,
@@ -8451,7 +8451,7 @@ NativeImageDumper::DumpEEClassForMethodTable( PTR_MethodTable mt )
                                      VERBOSE_TYPES );
         DisplayWriteFieldInt( m_numCTMFields, eecli->m_numCTMFields,
                               EEClassLayoutInfo, VERBOSE_TYPES );
-        PTR_FieldMarshaler fmArray( TO_TADDR(eecli->m_pFieldMarshalers) );
+        PTR_FieldMarshaler fmArray = eecli->GetFieldMarshalers();
         DisplayWriteFieldAddress( m_pFieldMarshalers,
                                   DPtrToPreferredAddr(fmArray),
                                   eecli->m_numCTMFields
@@ -8516,7 +8516,7 @@ NativeImageDumper::DumpEEClassForMethodTable( PTR_MethodTable mt )
                        DelegateEEClass, EECLASSES );
 
         WriteFieldMethodDesc( m_pInvokeMethod,
-                              delegateClass->m_pInvokeMethod,
+                              delegateClass->GetInvokeMethod(),
                               DelegateEEClass, EECLASSES );
         DumpFieldStub( m_pMultiCastInvokeStub, 
                        delegateClass->m_pMultiCastInvokeStub,
@@ -8543,10 +8543,10 @@ NativeImageDumper::DumpEEClassForMethodTable( PTR_MethodTable mt )
         }
 
         WriteFieldMethodDesc( m_pBeginInvokeMethod,
-                              delegateClass->m_pBeginInvokeMethod,
+                              delegateClass->GetBeginInvokeMethod(),
                               DelegateEEClass, EECLASSES );
         WriteFieldMethodDesc( m_pEndInvokeMethod,
-                              delegateClass->m_pEndInvokeMethod,
+                              delegateClass->GetEndInvokeMethod(),
                               DelegateEEClass, EECLASSES );
         DisplayWriteFieldPointer( m_pMarshalStub, delegateClass->m_pMarshalStub,
                        DelegateEEClass, EECLASSES );
@@ -8675,7 +8675,7 @@ NativeImageDumper::DumpEEClassForMethodTable( PTR_MethodTable mt )
                 }
             }
         }
-        PTR_BYTE varianceInfo = TO_TADDR(pClassOptional->m_pVarianceInfo);
+        PTR_BYTE varianceInfo = pClassOptional->GetVarianceInfo();
         if( varianceInfo == NULL )
         {
             DisplayWriteFieldPointer( m_pVarianceInfo, NULL,
@@ -8793,7 +8793,7 @@ void NativeImageDumper::DumpTypeDesc( PTR_TypeDesc td )
     {
         PTR_ParamTypeDesc ptd(td);
         DisplayStartVStructure( "ParamTypeDesc", TYPEDESCS );
-        WriteFieldMethodTable( m_TemplateMT, ptd->m_TemplateMT.GetValue(), 
+        WriteFieldMethodTable( m_TemplateMT, ptd->GetTemplateMethodTableInternal(),
                                ParamTypeDesc, TYPEDESCS );
         WriteFieldTypeHandle( m_Arg, ptd->m_Arg, 
                               ParamTypeDesc, TYPEDESCS );
@@ -8832,7 +8832,7 @@ void NativeImageDumper::DumpTypeDesc( PTR_TypeDesc td )
         PTR_TypeVarTypeDesc tvtd(td);
         DisplayStartVStructure( "TypeVarTypeDesc", TYPEDESCS );
         DisplayWriteFieldPointer( m_pModule,
-                                  DPtrToPreferredAddr(tvtd->m_pModule),
+                                  DPtrToPreferredAddr(tvtd->GetModule()),
                                   TypeVarTypeDesc, TYPEDESCS );
         DisplayWriteFieldUInt( m_typeOrMethodDef,
                                tvtd->m_typeOrMethodDef,

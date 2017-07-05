@@ -968,6 +968,8 @@ emitAttr emitter::emitInsTargetRegSize(instrDesc* id)
 
     switch (ins)
     {
+        case INS_ldarb:
+        case INS_stlrb:
         case INS_ldrb:
         case INS_strb:
         case INS_ldurb:
@@ -975,6 +977,8 @@ emitAttr emitter::emitInsTargetRegSize(instrDesc* id)
             result = EA_4BYTE;
             break;
 
+        case INS_ldarh:
+        case INS_stlrh:
         case INS_ldrh:
         case INS_strh:
         case INS_ldurh:
@@ -1005,6 +1009,8 @@ emitAttr emitter::emitInsTargetRegSize(instrDesc* id)
             result = id->idOpSize();
             break;
 
+        case INS_ldar:
+        case INS_stlr:
         case INS_ldr:
         case INS_str:
         case INS_ldur:
@@ -1031,6 +1037,8 @@ emitAttr emitter::emitInsLoadStoreSize(instrDesc* id)
 
     switch (ins)
     {
+        case INS_ldarb:
+        case INS_stlrb:
         case INS_ldrb:
         case INS_strb:
         case INS_ldurb:
@@ -1040,6 +1048,8 @@ emitAttr emitter::emitInsLoadStoreSize(instrDesc* id)
             result = EA_1BYTE;
             break;
 
+        case INS_ldarh:
+        case INS_stlrh:
         case INS_ldrh:
         case INS_strh:
         case INS_ldurh:
@@ -1062,6 +1072,8 @@ emitAttr emitter::emitInsLoadStoreSize(instrDesc* id)
             result = id->idOpSize();
             break;
 
+        case INS_ldar:
+        case INS_stlr:
         case INS_ldr:
         case INS_str:
         case INS_ldur:
@@ -7379,7 +7391,9 @@ void emitter::emitIns_Call(EmitCallType          callType,
 
 /*static*/ emitter::code_t emitter::insEncodeDatasizeLS(emitter::code_t code, emitAttr size)
 {
-    if (code & 0x00800000) // Is this a sign-extending opcode? (i.e. ldrsw, ldrsh, ldrsb)
+    bool exclusive = ((code & 0x35000000) == 0);
+
+    if ((code & 0x00800000) && !exclusive) // Is this a sign-extending opcode? (i.e. ldrsw, ldrsh, ldrsb)
     {
         assert((size == EA_4BYTE) || (size == EA_8BYTE));
         if ((code & 0x80000000) == 0) // Is it a ldrsh or ldrsb and not ldrsw ?

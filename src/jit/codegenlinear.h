@@ -24,8 +24,12 @@ void genCodeForMulHi(GenTreeOp* treeNode);
 void genLeaInstruction(GenTreeAddrMode* lea);
 void genSetRegToCond(regNumber dstReg, GenTreePtr tree);
 
+#if defined(_TARGET_ARMARCH_)
+void genScaledAdd(emitAttr attr, regNumber targetReg, regNumber baseReg, regNumber indexReg, int scale);
+#endif // _TARGET_ARMARCH_
+
 #if defined(_TARGET_ARM_)
-void genCodeForMulLong(GenTreeMulLong* treeNode);
+void genCodeForMulLong(GenTreeMultiRegOp* treeNode);
 #endif // _TARGET_ARM_
 
 #if !defined(_TARGET_64BIT_)
@@ -41,6 +45,9 @@ void genCodeForCompare(GenTreeOp* tree);
 void genIntrinsic(GenTreePtr treeNode);
 void genPutArgStk(GenTreePutArgStk* treeNode);
 void genPutArgReg(GenTreeOp* tree);
+#ifdef _TARGET_ARM_
+void genPutArgSplit(GenTreePutArgSplit* treeNode);
+#endif
 
 #if defined(_TARGET_XARCH_)
 unsigned getBaseVarForPutArgStk(GenTreePtr treeNode);
@@ -52,12 +59,6 @@ unsigned getFirstArgWithStackSlot();
 
 void genCompareFloat(GenTreePtr treeNode);
 void genCompareInt(GenTreePtr treeNode);
-
-#if defined(_TARGET_ARM_)
-void genCompareLong(GenTreePtr treeNode);
-void genJccLongHi(genTreeOps cmp, BasicBlock* jumpTrue, BasicBlock* jumpFalse, bool isUnsigned = false);
-void genJccLongLo(genTreeOps cmp, BasicBlock* jumpTrue, BasicBlock* jumpFalse);
-#endif // defined(_TARGET_ARM_)
 
 #ifdef FEATURE_SIMD
 enum SIMDScalarMoveType
@@ -146,6 +147,9 @@ void genConsumeBlockOp(GenTreeBlk* blkNode, regNumber dstReg, regNumber srcReg, 
 #ifdef FEATURE_PUT_STRUCT_ARG_STK
 void genConsumePutStructArgStk(GenTreePutArgStk* putArgStkNode, regNumber dstReg, regNumber srcReg, regNumber sizeReg);
 #endif // FEATURE_PUT_STRUCT_ARG_STK
+#ifdef _TARGET_ARM_
+void CodeGen::genConsumeArgSplitStruct(GenTreePutArgSplit* putArgNode);
+#endif
 
 void genConsumeRegs(GenTree* tree);
 void genConsumeOperands(GenTreeOp* tree);

@@ -1340,7 +1340,7 @@ void Compiler::optPrintLoopRecording(unsigned loopInd)
     {
         printf(" [over V%02u", optLoopTable[loopInd].lpIterVar());
         printf(" (");
-        printf(GenTree::NodeName(optLoopTable[loopInd].lpIterOper()));
+        printf(GenTree::OpName(optLoopTable[loopInd].lpIterOper()));
         printf(" ");
         printf("%d )", optLoopTable[loopInd].lpIterConst());
 
@@ -1354,7 +1354,7 @@ void Compiler::optPrintLoopRecording(unsigned loopInd)
         }
 
         // If a simple test condition print operator and the limits */
-        printf(GenTree::NodeName(optLoopTable[loopInd].lpTestOper()));
+        printf(GenTree::OpName(optLoopTable[loopInd].lpTestOper()));
 
         if (optLoopTable[loopInd].lpFlags & LPFLG_CONST_LIMIT)
         {
@@ -3289,7 +3289,7 @@ void Compiler::optUnrollLoops()
 
 /*****************************************************************************
  *
- *  Return non-zero if there is a code path from 'topBB' to 'botBB' that will
+ *  Return false if there is a code path from 'topBB' to 'botBB' that might
  *  not execute a method call.
  */
 
@@ -7593,7 +7593,7 @@ bool Compiler::optIdentifyLoopOptInfo(unsigned loopNum, LoopCloneContext* contex
            (pLoop->lpIterOper() == GT_SUB || pLoop->lpIterOper() == GT_ASG_SUB))))
     {
         JITDUMP("> Loop test (%s) doesn't agree with the direction (%s) of the pLoop->\n",
-                GenTree::NodeName(pLoop->lpTestOper()), GenTree::NodeName(pLoop->lpIterOper()));
+                GenTree::OpName(pLoop->lpTestOper()), GenTree::OpName(pLoop->lpIterOper()));
         return false;
     }
 
@@ -8105,7 +8105,7 @@ void Compiler::optOptimizeBoolsGcStress(BasicBlock* condBlock)
 
     // Bump up the ref-counts of any variables in 'comparandClone'
     compCurBB = condBlock;
-    fgWalkTreePre(&comparandClone, Compiler::lvaIncRefCntsCB, (void*)this, true);
+    IncLclVarRefCountsVisitor::WalkTree(this, comparandClone);
 
     noway_assert(relop->gtOp.gtOp1 == comparand);
     genTreeOps oper   = compStressCompile(STRESS_OPT_BOOLS_GC, 50) ? GT_OR : GT_AND;

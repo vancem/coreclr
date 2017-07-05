@@ -1728,12 +1728,12 @@ void Interpreter::JitMethodIfAppropriate(InterpreterMethodInfo* interpMethInfo, 
 
         if (InterpretationStubToMethodInfo(stub) == md)
         {
-#ifdef _DEBUG
+#if INTERP_TRACING
             if (s_TraceInterpreterJITTransitionFlag.val(CLRConfig::INTERNAL_TraceInterpreterJITTransition))
             {
                 fprintf(GetLogFile(), "JITting method %s:%s.\n", md->m_pszDebugClassName, md->m_pszDebugMethodName);
             }
-#endif // _DEBUG
+#endif // INTERP_TRACING
             CORJIT_FLAGS jitFlags(CORJIT_FLAGS::CORJIT_FLAG_MAKEFINALCODE);
             NewHolder<COR_ILMETHOD_DECODER> pDecoder(NULL);
             // Dynamic methods (e.g., IL stubs) do not have an IL decoder but may
@@ -2242,22 +2242,22 @@ EvalLoop:
 
         case CEE_CALL:
             DoCall(/*virtualCall*/false);
-#ifdef _DEBUG
+#if INTERP_TRACING
             if (s_TraceInterpreterILFlag.val(CLRConfig::INTERNAL_TraceInterpreterIL))
             {
                 fprintf(GetLogFile(), "  Returning to method %s, stub num %d.\n", methName, m_methInfo->m_stubNum);
             }
-#endif // _DEBUG
+#endif // INTERP_TRACING
             continue;
 
         case CEE_CALLVIRT:
             DoCall(/*virtualCall*/true);
-#ifdef _DEBUG
+#if INTERP_TRACING
             if (s_TraceInterpreterILFlag.val(CLRConfig::INTERNAL_TraceInterpreterIL))
             {
                 fprintf(GetLogFile(), "  Returning to method %s, stub num %d.\n", methName, m_methInfo->m_stubNum);
             }
-#endif // _DEBUG
+#endif // INTERP_TRACING
             continue;
 
             // HARD
@@ -2626,8 +2626,10 @@ EvalLoop:
             {
                 assert(m_curStackHt > 0);
                 m_curStackHt--;
-#ifdef _DEBUG
+#if defined(_DEBUG) || defined(_AMD64_)
                 CorInfoType cit = OpStackTypeGet(m_curStackHt).ToCorInfoType();
+#endif // _DEBUG || _AMD64_
+#ifdef _DEBUG
                 assert(cit == CORINFO_TYPE_INT || cit == CORINFO_TYPE_UINT || cit == CORINFO_TYPE_NATIVEINT);
 #endif // _DEBUG
 #if defined(_AMD64_)
@@ -2786,12 +2788,12 @@ EvalLoop:
             continue;
         case CEE_NEWOBJ:
             NewObj();
-#ifdef _DEBUG
+#if INTERP_TRACING
             if (s_TraceInterpreterILFlag.val(CLRConfig::INTERNAL_TraceInterpreterIL))
             {
                 fprintf(GetLogFile(), "  Returning to method %s, stub num %d.\n", methName, m_methInfo->m_stubNum);
             }
-#endif // _DEBUG
+#endif // INTERP_TRACING
             continue;
         case CEE_CASTCLASS:
             CastClass();
@@ -4316,13 +4318,13 @@ void Interpreter::StInd()
     *ptr = val;
     m_curStackHt -= 2;
 
-#ifdef _DEBUG
+#if INTERP_TRACING
     if (s_TraceInterpreterILFlag.val(CLRConfig::INTERNAL_TraceInterpreterIL) &&
         IsInLocalArea(ptr))
     {
         PrintLocals();
     }
-#endif // _DEBUG
+#endif // INTERP_TRACING
 }
 
 void Interpreter::StInd_Ref()
@@ -4338,13 +4340,13 @@ void Interpreter::StInd_Ref()
     SetObjectReferenceUnchecked(ptr, val);
     m_curStackHt -= 2;
 
-#ifdef _DEBUG
+#if INTERP_TRACING
     if (s_TraceInterpreterILFlag.val(CLRConfig::INTERNAL_TraceInterpreterIL) &&
         IsInLocalArea(ptr))
     {
         PrintLocals();
     }
-#endif // _DEBUG
+#endif // INTERP_TRACING
 }
 
 
@@ -6068,13 +6070,12 @@ void Interpreter::NewArr()
         }
 #endif
 
-        TypeHandle typeHnd(elemClsHnd);
-        ArrayTypeDesc* pArrayClassRef = typeHnd.AsArray();
+        MethodTable *pArrayMT = (MethodTable *) elemClsHnd;
 
-        pArrayClassRef->GetMethodTable()->CheckRunClassInitThrowing();
+        pArrayMT->CheckRunClassInitThrowing();
 
         INT32 size32 = (INT32)sz;
-        Object* newarray = OBJECTREFToObject(AllocateArrayEx(typeHnd, &size32, 1));
+        Object* newarray = OBJECTREFToObject(AllocateArrayEx(pArrayMT, &size32, 1));
 
         GCX_FORBID();
         OpStackTypeSet(stkInd, InterpreterType(CORINFO_TYPE_CLASS));
@@ -11895,7 +11896,7 @@ void Interpreter::PrintPostMortemData()
 
     // Otherwise...
 
-#ifdef _DEBUG
+#if INTERP_TRACING
     // Let's print two things: the number of methods that are 0-10, or more, and
     // For each 10% of methods, cumulative % of invocations they represent.  By 1% for last 10%.
 

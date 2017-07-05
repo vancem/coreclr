@@ -3573,7 +3573,7 @@ private:
     PTR_VOID    m_CacheStackLimit;
     UINT_PTR    m_CacheStackSufficientExecutionLimit;
 
-#define HARD_GUARD_REGION_SIZE OS_PAGE_SIZE
+#define HARD_GUARD_REGION_SIZE GetOsPageSize()
 
 private:
     //
@@ -3587,8 +3587,8 @@ private:
 
     // Every stack has a single reserved page at its limit that we call the 'hard guard page'. This page is never
     // committed, and access to it after a stack overflow will terminate the thread.
-#define HARD_GUARD_REGION_SIZE OS_PAGE_SIZE
-#define SIZEOF_DEFAULT_STACK_GUARANTEE 1 * OS_PAGE_SIZE
+#define HARD_GUARD_REGION_SIZE GetOsPageSize()
+#define SIZEOF_DEFAULT_STACK_GUARANTEE 1 * GetOsPageSize()
 
 public:
     // This will return the last stack address that one could write to before a stack overflow.
@@ -5664,6 +5664,7 @@ private:
     DPTR(PTR_Thread)    m_idToThread;         // map thread ids to threads
     DWORD       m_idToThreadCapacity; // capacity of the map
 
+#ifndef DACCESS_COMPILE
     void GrowIdToThread()
     {
         CONTRACTL
@@ -5675,7 +5676,6 @@ private:
         }
         CONTRACTL_END;
 
-#ifndef DACCESS_COMPILE
         DWORD newCapacity = m_idToThreadCapacity == 0 ? 16 : m_idToThreadCapacity*2;
         Thread **newIdToThread = new Thread*[newCapacity];
 
@@ -5692,11 +5692,8 @@ private:
         delete[] m_idToThread;
         m_idToThread = newIdToThread;
         m_idToThreadCapacity = newCapacity;
-#else
-        DacNotImpl();
-#endif // !DACCESS_COMPILE
-
     }
+#endif // !DACCESS_COMPILE
 
 public:
     IdDispenser() :
@@ -5726,9 +5723,9 @@ public:
         return (id > 0) && (id <= m_highestId);
     }
 
+#ifndef DACCESS_COMPILE
     void NewId(Thread *pThread, DWORD & newId)
     {
-#ifndef DACCESS_COMPILE
         WRAPPER_NO_CONTRACT;
         DWORD result;
         CrstHolder ch(&m_Crst);
@@ -5754,15 +5751,12 @@ public:
         newId = result;
         if (result < m_idToThreadCapacity)
             m_idToThread[result] = pThread;
-
-#else
-        DacNotImpl();
-#endif // !DACCESS_COMPILE
     }
+#endif // !DACCESS_COMPILE
 
+#ifndef DACCESS_COMPILE
     void DisposeId(DWORD id)
     {
-#ifndef DACCESS_COMPILE
         CONTRACTL
         {
             NOTHROW;
@@ -5791,10 +5785,8 @@ public:
             }
 #endif
         }
-#else
-        DacNotImpl();
-#endif // !DACCESS_COMPILE
     }
+#endif // !DACCESS_COMPILE
 
     Thread *IdToThread(DWORD id)
     {

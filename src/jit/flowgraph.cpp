@@ -886,8 +886,8 @@ void Compiler::fgRemoveReturnBlock(BasicBlock* block)
 
 flowList* Compiler::fgGetPredForBlock(BasicBlock* block, BasicBlock* blockPred)
 {
-    noway_assert(block);
-    noway_assert(blockPred);
+    assert(block);
+    assert(blockPred);
     assert(!fgCheapPredsValid);
 
     flowList* pred;
@@ -1044,10 +1044,28 @@ flowList* Compiler::fgAddRefPred(BasicBlock* block,
 
     assert(!fgCheapPredsValid);
 
-    flowList* flow = fgGetPredForBlock(block, blockPred);
+    flowList* flow;
 
-    if (flow)
+    // Keep the predecessor list in lowest to highest bbNum order. This allows us to discover the loops in
+    // optFindNaturalLoops from innermost to outermost.
+    //
+    // TODO-Throughput: Inserting an edge for a block in sorted order requires searching every existing edge.
+    // Thus, inserting all the edges for a block is quadratic in the number of edges. We need to either
+    // not bother sorting for debuggable code, or sort in optFindNaturalLoops, or better, make the code in
+    // optFindNaturalLoops not depend on order. This also requires ensuring that nobody else has taken a
+    // dependency on this order. Note also that we don't allow duplicates in the list; we maintain a flDupCount
+    // count of duplication. This also necessitates walking the flow list for every edge we add.
+
+    flowList** listp = &block->bbPreds;
+    while ((*listp != nullptr) && ((*listp)->flBlock->bbNum < blockPred->bbNum))
     {
+        listp = &(*listp)->flNext;
+    }
+
+    if ((*listp != nullptr) && ((*listp)->flBlock == blockPred))
+    {
+        // The predecessor block already exists in the flow list; simply add to its duplicate count.
+        flow = *listp;
         noway_assert(flow->flDupCount > 0);
         flow->flDupCount++;
     }
@@ -1063,21 +1081,7 @@ flowList* Compiler::fgAddRefPred(BasicBlock* block,
         // Any changes to the flow graph invalidate the dominator sets.
         fgModified = true;
 
-        // Keep the predecessor list in lowest to highest bbNum order
-        // This allows us to discover the loops in optFindNaturalLoops
-        //  from innermost to outermost.
-
-        // TODO-Throughput: This search is quadratic if you have many jumps
-        // to the same target.   We need to either not bother sorting for
-        // debuggable code, or sort in optFindNaturalLoops, or better, make
-        // the code in optFindNaturalLoops not depend on order.
-
-        flowList** listp = &block->bbPreds;
-        while (*listp && ((*listp)->flBlock->bbNum < blockPred->bbNum))
-        {
-            listp = &(*listp)->flNext;
-        }
-
+        // Insert the new edge in the list in the correct ordered location.
         flow->flNext = *listp;
         *listp       = flow;
 
@@ -1828,7 +1832,7 @@ void Compiler::fgComputeReachabilitySets()
     // Also, set BBF_GC_SAFE_POINT.
 
     bool     change;
-    BlockSet BLOCKSET_INIT_NOCOPY(newReach, BlockSetOps::MakeEmpty(this));
+    BlockSet newReach(BlockSetOps::MakeEmpty(this));
     do
     {
         change = false;
@@ -2200,7 +2204,7 @@ void Compiler::fgDfsInvPostOrder()
 
     // visited   :  Once we run the DFS post order sort recursive algorithm, we mark the nodes we visited to avoid
     //              backtracking.
-    BlockSet BLOCKSET_INIT_NOCOPY(visited, BlockSetOps::MakeEmpty(this));
+    BlockSet visited(BlockSetOps::MakeEmpty(this));
 
     // We begin by figuring out which basic blocks don't have incoming edges and mark them as
     // start nodes.  Later on we run the recursive algorithm for each node that we
@@ -2269,7 +2273,7 @@ BlockSet_ValRet_T Compiler::fgDomFindStartNodes()
     // We begin assuming everything is a start block and remove any block that is being referenced by another in its
     // successor list.
 
-    BlockSet BLOCKSET_INIT_NOCOPY(startNodes, BlockSetOps::MakeFull(this));
+    BlockSet startNodes(BlockSetOps::MakeFull(this));
 
     for (block = fgFirstBB; block != nullptr; block = block->bbNext)
     {
@@ -2393,7 +2397,7 @@ void Compiler::fgComputeDoms()
     assert(BasicBlockBitSetTraits::GetSize(this) == fgBBNumMax + 1);
 #endif // DEBUG
 
-    BlockSet BLOCKSET_INIT_NOCOPY(processedBlks, BlockSetOps::MakeEmpty(this));
+    BlockSet processedBlks(BlockSetOps::MakeEmpty(this));
 
     fgBBInvPostOrder = new (this, CMK_DominatorMemory) BasicBlock*[fgBBNumMax + 1];
     memset(fgBBInvPostOrder, 0, sizeof(BasicBlock*) * (fgBBNumMax + 1));
@@ -2693,7 +2697,7 @@ BlockSet_ValRet_T Compiler::fgDomTreeEntryNodes(BasicBlockList** domTree)
 {
     // domTreeEntryNodes ::  Set that represents which basic blocks are roots of the dominator forest.
 
-    BlockSet BLOCKSET_INIT_NOCOPY(domTreeEntryNodes, BlockSetOps::MakeFull(this));
+    BlockSet domTreeEntryNodes(BlockSetOps::MakeFull(this));
 
     // First of all we need to find all the roots of the dominance forest.
 
@@ -2839,7 +2843,7 @@ BlockSet_ValRet_T Compiler::fgGetDominatorSet(BasicBlock* block)
 {
     assert(block != nullptr);
 
-    BlockSet BLOCKSET_INIT_NOCOPY(domSet, BlockSetOps::MakeEmpty(this));
+    BlockSet domSet(BlockSetOps::MakeEmpty(this));
 
     do
     {
@@ -9271,7 +9275,7 @@ void Compiler::fgUpdateRefCntForClone(BasicBlock* addedToBlock, GenTreePtr clone
     if (lvaLocalVarRefCounted)
     {
         compCurBB = addedToBlock;
-        fgWalkTreePre(&clonedTree, Compiler::lvaIncRefCntsCB, (void*)this, true);
+        IncLclVarRefCountsVisitor::WalkTree(this, clonedTree);
     }
 }
 
@@ -9289,10 +9293,10 @@ void Compiler::fgUpdateRefCntForExtract(GenTreePtr wholeTree, GenTreePtr keptTre
          */
         if (keptTree)
         {
-            fgWalkTreePre(&keptTree, Compiler::lvaIncRefCntsCB, (void*)this, true);
+            IncLclVarRefCountsVisitor::WalkTree(this, keptTree);
         }
 
-        fgWalkTreePre(&wholeTree, Compiler::lvaDecRefCntsCB, (void*)this, true);
+        DecLclVarRefCountsVisitor::WalkTree(this, wholeTree);
     }
 }
 
@@ -9541,7 +9545,7 @@ DONE:
         {
             if (fgStmtListThreaded)
             {
-                fgWalkTreePre(&stmt->gtStmtExpr, Compiler::lvaDecRefCntsCB, (void*)this, true);
+                DecLclVarRefCountsVisitor::WalkTree(this, stmt->gtStmtExpr);
             }
         }
     }
@@ -10298,7 +10302,7 @@ void Compiler::fgRemoveConditionalJump(BasicBlock* block)
         else
         {
             // Otherwise, just remove the jump node itself.
-            blockRange.Remove(test);
+            blockRange.Remove(test, true);
         }
     }
     else
@@ -12612,7 +12616,7 @@ bool Compiler::fgMightHaveLoop()
     // and potentially change the block epoch.
 
     BitVecTraits blockVecTraits(fgBBNumMax + 1, this);
-    BitVec       BLOCKSET_INIT_NOCOPY(blocksSeen, BitVecOps::MakeEmpty(&blockVecTraits));
+    BitVec       blocksSeen(BitVecOps::MakeEmpty(&blockVecTraits));
 
     for (BasicBlock* block = fgFirstBB; block; block = block->bbNext)
     {
@@ -14070,7 +14074,7 @@ bool Compiler::fgOptimizeBranchToNext(BasicBlock* block, BasicBlock* bNext, Basi
             else
             {
                 // Otherwise, just remove the jump node itself.
-                blockRange.Remove(jmp);
+                blockRange.Remove(jmp, true);
             }
         }
         else
@@ -18488,8 +18492,7 @@ void Compiler::fgSetBlockOrder()
 
 #if FEATURE_FASTTAILCALL
 #ifndef JIT32_GCENCODER
-        if (block->endsWithTailCallOrJmp(this, true) && !(block->bbFlags & BBF_GC_SAFE_POINT) &&
-            optReachWithoutCall(fgFirstBB, block))
+        if (block->endsWithTailCallOrJmp(this, true) && optReachWithoutCall(fgFirstBB, block))
         {
             // We have a tail call that is reachable without making any other
             // 'normal' call that would have counted as a GC Poll.  If we were

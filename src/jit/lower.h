@@ -28,7 +28,7 @@ public:
         m_lsra = (LinearScan*)lsra;
         assert(m_lsra);
     }
-    virtual void DoPhase();
+    virtual void DoPhase() override;
 
     // If requiresOverflowCheck is false, all other values will be unset
     struct CastInfo
@@ -134,6 +134,8 @@ private:
 
     void TreeNodeInfoInitCheckByteable(GenTree* tree);
 
+    void SetDelayFree(GenTree* delayUseSrc);
+
 #if defined(_TARGET_XARCH_)
     void TreeNodeInfoInitSimple(GenTree* tree);
 
@@ -229,6 +231,9 @@ private:
 #ifdef FEATURE_PUT_STRUCT_ARG_STK
     void LowerPutArgStk(GenTreePutArgStk* tree);
     void TreeNodeInfoInitPutArgStk(GenTreePutArgStk* tree);
+#ifdef _TARGET_ARM_
+    void TreeNodeInfoInitPutArgSplit(GenTreePutArgSplit* tree, TreeNodeInfo& info, fgArgTabEntryPtr argInfo);
+#endif
 #endif // FEATURE_PUT_STRUCT_ARG_STK
     void TreeNodeInfoInitLclHeap(GenTree* tree);
 
@@ -237,7 +242,7 @@ private:
     // Per tree node member functions
     void LowerStoreInd(GenTree* node);
     GenTree* LowerAdd(GenTree* node);
-    void LowerUnsignedDivOrMod(GenTree* node);
+    GenTree* LowerUnsignedDivOrMod(GenTreeOp* divMod);
     GenTree* LowerSignedDivOrMod(GenTree* node);
     void LowerBlockStore(GenTreeBlk* blkNode);
 
@@ -279,7 +284,7 @@ private:
     bool IsContainableImmed(GenTree* parentNode, GenTree* childNode);
 
     // Return true if 'node' is a containable memory op.
-    bool IsContainableMemoryOp(GenTree* node);
+    bool IsContainableMemoryOp(GenTree* node, bool useTracked);
 
     // Makes 'childNode' contained in the 'parentNode'
     void MakeSrcContained(GenTreePtr parentNode, GenTreePtr childNode);
