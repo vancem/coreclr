@@ -467,7 +467,7 @@ void Module::InitializeForProfiling()
     }
     else // ReadyToRun image
     {
-#ifdef FEATURE_READYTORUN_COMPILER
+#ifdef FEATURE_READYTORUN
         // We already setup the m_methodProfileList in the ReadyToRunInfo constructor
         if (m_methodProfileList != nullptr)
         {
@@ -10702,7 +10702,7 @@ void Module::RestoreMethodDescPointer(RelativeFixupPointer<PTR_MethodDesc> * ppM
 }
 
 /*static*/
-void Module::RestoreFieldDescPointer(FixupPointer<PTR_FieldDesc> * ppFD)
+void Module::RestoreFieldDescPointer(RelativeFixupPointer<PTR_FieldDesc> * ppFD)
 {
     CONTRACTL
     {
@@ -10711,6 +10711,9 @@ void Module::RestoreFieldDescPointer(FixupPointer<PTR_FieldDesc> * ppFD)
         MODE_ANY;
     }
     CONTRACTL_END;
+
+    if (!ppFD->IsTagged())
+        return;
 
     PTR_FieldDesc * ppValue = ppFD->GetValuePtr();
 
@@ -10723,7 +10726,7 @@ void Module::RestoreFieldDescPointer(FixupPointer<PTR_FieldDesc> * ppFD)
         CONSISTENCY_CHECK((CORCOMPILE_UNTAG_TOKEN(fixup)>>32) == 0);
 #endif
 
-        Module * pContainingModule = ExecutionManager::FindZapModule(dac_cast<TADDR>(ppValue));
+        Module * pContainingModule = ExecutionManager::FindZapModule((TADDR)ppValue);
         PREFIX_ASSUME(pContainingModule != NULL);
 
         RVA fixupRva = (RVA) CORCOMPILE_UNTAG_TOKEN(fixup);
@@ -12990,7 +12993,8 @@ idTypeSpec Module::LogInstantiatedType(TypeHandle typeHnd, ULONG flagNum)
         // We can relax this if we allow a (duplicate) MethodTable to live
         // in any module (which might be needed for ngen of generics)
 #ifdef FEATURE_PREJIT
-        PRECONDITION(this == GetPreferredZapModuleForTypeHandle(typeHnd));
+        // All callsites already do this...
+        // PRECONDITION(this == GetPreferredZapModuleForTypeHandle(typeHnd));
 #endif
     }
     CONTRACT_END;

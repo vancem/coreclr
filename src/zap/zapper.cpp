@@ -125,7 +125,7 @@ STDAPI NGenWorker(LPCWSTR pwzFilename, DWORD dwFlags, LPCWSTR pwzPlatformAssembl
         ngo.fEmitFixups = false;
         ngo.fFatHeaders = false;
 
-        ngo.fVerbose = false;
+        ngo.fVerbose = (dwFlags & NGENWORKER_FLAGS_VERBOSE) != 0;
         ngo.uStats = false;
 
         ngo.fNgenLastRetry = false;
@@ -1376,6 +1376,13 @@ void Zapper::InitializeCompilerFlags(CORCOMPILE_VERSION_INFO * pVersionInfo)
 
     if (pVersionInfo->wCodegenFlags & CORCOMPILE_CODEGEN_PROF_INSTRUMENTING)
         m_pOpt->m_compilerFlags.Set(CORJIT_FLAGS::CORJIT_FLAG_BBINSTR);
+
+    // Set CORJIT_FLAG_MIN_OPT only if COMPlus_JitMinOpts == 1
+    static ConfigDWORD g_jitMinOpts;
+    if (g_jitMinOpts.val_DontUse_(CLRConfig::UNSUPPORTED_JITMinOpts, 0) == 1)
+    {
+        m_pOpt->m_compilerFlags.Set(CORJIT_FLAGS::CORJIT_FLAG_MIN_OPT);
+    }
 
 #if defined(_TARGET_X86_)
 

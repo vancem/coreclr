@@ -1630,7 +1630,7 @@ bool Compiler::fgComputeLifeLocal(VARSET_TP& life, VARSET_VALARG_TP keepAliveVar
 {
     unsigned lclNum = lclVarNode->gtLclVarCommon.gtLclNum;
 
-    noway_assert(lclNum < lvaCount);
+    assert(lclNum < lvaCount);
     LclVarDsc* varDsc = &lvaTable[lclNum];
 
     unsigned  varIndex;
@@ -1640,7 +1640,7 @@ bool Compiler::fgComputeLifeLocal(VARSET_TP& life, VARSET_VALARG_TP keepAliveVar
     if (varDsc->lvTracked)
     {
         varIndex = varDsc->lvVarIndex;
-        noway_assert(varIndex < lvaTrackedCount);
+        assert(varIndex < lvaTrackedCount);
 
         /* Is this a definition or use? */
 
@@ -2277,6 +2277,11 @@ bool Compiler::fgTryRemoveDeadLIRStore(LIR::Range& blockRange, GenTree* node, Ge
     {
         // If the range of the operands contains unrelated code or if it contains any side effects,
         // do not remove it. Instead, just remove the store.
+
+        store->VisitOperands([](GenTree* operand) -> GenTree::VisitResult {
+            operand->gtLIRFlags |= LIR::Flags::IsUnusedValue;
+            return GenTree::VisitResult::Continue;
+        });
 
         *next = node->gtPrev;
     }

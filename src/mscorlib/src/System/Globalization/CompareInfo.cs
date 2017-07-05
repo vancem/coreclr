@@ -34,6 +34,7 @@ namespace System.Globalization
     }
 
     [Serializable]
+    [System.Runtime.CompilerServices.TypeForwardedFrom("mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089")]
     public partial class CompareInfo : IDeserializationCallback
     {
         // Mask used to check if IndexOf()/LastIndexOf()/IsPrefix()/IsPostfix() has the right flags.
@@ -69,11 +70,13 @@ namespace System.Globalization
         private string _sortName; // The name that defines our behavior.
 
         [OptionalField(VersionAdded = 3)]
-        private SortVersion m_sortVersion; // Do not rename (binary serialization)
+        private SortVersion m_SortVersion; // Do not rename (binary serialization)
 
         // _invariantMode is defined for the perf reason as accessing the instance field is faster than access the static property GlobalizationMode.Invariant
         [NonSerialized]
         private readonly bool _invariantMode = GlobalizationMode.Invariant;
+        
+        private int culture; // Do not rename (binary serialization). The fields sole purpose is to support Desktop serialization.
 
         internal CompareInfo(CultureInfo culture)
         {
@@ -233,14 +236,26 @@ namespace System.Globalization
 
         private void OnDeserialized()
         {
-            if (m_name != null)
+            // If we didn't have a name, use the LCID
+            if (m_name == null)
+            {
+                // From whidbey, didn't have a name
+                CultureInfo ci = CultureInfo.GetCultureInfo(this.culture);
+                m_name = ci._name;
+            }
+            else
             {
                 InitSort(CultureInfo.GetCultureInfo(m_name));
             }
         }
 
         [OnSerializing]
-        private void OnSerializing(StreamingContext ctx) { }
+        private void OnSerializing(StreamingContext ctx)
+        {
+            // This is merely for serialization compatibility with Whidbey/Orcas, it can go away when we don't want that compat any more.
+            culture = CultureInfo.GetCultureInfo(this.Name).LCID; // This is the lcid of the constructing culture (still have to dereference to get target sort)
+            Contract.Assert(m_name != null, "CompareInfo.OnSerializing - expected m_name to be set already");
+        }
 
         ///////////////////////////----- Name -----/////////////////////////////////
         //
@@ -1208,11 +1223,11 @@ namespace System.Globalization
         {
             get
             {
-                if (m_sortVersion == null)
+                if (m_SortVersion == null)
                 {
                     if (_invariantMode)
                     {
-                        m_sortVersion = new SortVersion(0, CultureInfo.LOCALE_INVARIANT, new Guid(0, 0, 0, 0, 0, 0, 0,
+                        m_SortVersion = new SortVersion(0, CultureInfo.LOCALE_INVARIANT, new Guid(0, 0, 0, 0, 0, 0, 0,
                                                                         (byte) (CultureInfo.LOCALE_INVARIANT >> 24),
                                                                         (byte) ((CultureInfo.LOCALE_INVARIANT  & 0x00FF0000) >> 16),
                                                                         (byte) ((CultureInfo.LOCALE_INVARIANT  & 0x0000FF00) >> 8),
@@ -1220,11 +1235,11 @@ namespace System.Globalization
                     }
                     else
                     {
-                        m_sortVersion = GetSortVersion();
+                        m_SortVersion = GetSortVersion();
                     }
                 }
 
-                return m_sortVersion;
+                return m_SortVersion;
             }
         }
 

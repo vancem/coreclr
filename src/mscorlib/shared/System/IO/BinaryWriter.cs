@@ -2,24 +2,8 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
-/*============================================================
-**
-** 
-** 
-**
-** Purpose: Provides a way to write primitives types in 
-** binary from a Stream, while also supporting writing Strings
-** in a particular encoding.
-**
-**
-===========================================================*/
-
-using System;
-using System.Runtime;
-using System.Runtime.Serialization;
 using System.Text;
 using System.Diagnostics;
-using System.Diagnostics.Contracts;
 
 namespace System.IO
 {
@@ -36,7 +20,6 @@ namespace System.IO
         private Encoding _encoding;
         private Encoder _encoder;
 
-        [OptionalField]  // New in .NET FX 4.5.  False is the right default value.
         private bool _leaveOpen;
 
         // Perf optimization stuff
@@ -71,7 +54,6 @@ namespace System.IO
                 throw new ArgumentNullException(nameof(encoding));
             if (!output.CanWrite)
                 throw new ArgumentException(SR.Argument_StreamNotWritable);
-            Contract.EndContractBlock();
 
             OutStream = output;
             _buffer = new byte[16];
@@ -104,11 +86,9 @@ namespace System.IO
             Dispose(true);
         }
 
-        /*
-         * Returns the stream associate with the writer. It flushes all pending
-         * writes before returning. All subclasses should override Flush to
-         * ensure that all buffered data is sent to the stream.
-         */
+        // Returns the stream associated with the writer. It flushes all pending
+        // writes before returning. All subclasses should override Flush to
+        // ensure that all buffered data is sent to the stream.
         public virtual Stream BaseStream
         {
             get
@@ -165,7 +145,6 @@ namespace System.IO
         {
             if (buffer == null)
                 throw new ArgumentNullException(nameof(buffer));
-            Contract.EndContractBlock();
             OutStream.Write(buffer, 0, buffer.Length);
         }
 
@@ -188,7 +167,6 @@ namespace System.IO
         {
             if (Char.IsSurrogate(ch))
                 throw new ArgumentException(SR.Arg_SurrogatesNotAllowedAsSingleChar);
-            Contract.EndContractBlock();
 
             Debug.Assert(_encoding.GetMaxByteCount(1) <= 16, "_encoding.GetMaxByteCount(1) <= 16)");
             int numBytes = 0;
@@ -208,7 +186,6 @@ namespace System.IO
         {
             if (chars == null)
                 throw new ArgumentNullException(nameof(chars));
-            Contract.EndContractBlock();
 
             byte[] bytes = _encoding.GetBytes(chars, 0, chars.Length);
             OutStream.Write(bytes, 0, bytes.Length);
@@ -351,7 +328,6 @@ namespace System.IO
         {
             if (value == null)
                 throw new ArgumentNullException(nameof(value));
-            Contract.EndContractBlock();
 
             int len = _encoding.GetByteCount(value);
             Write7BitEncodedInt(len);
@@ -376,7 +352,7 @@ namespace System.IO
                 // boundaries properly).  
                 int charStart = 0;
                 int numLeft = value.Length;
-#if _DEBUG
+#if DEBUG
                 int totalBytes = 0;
 #endif
                 while (numLeft > 0)
@@ -399,7 +375,7 @@ namespace System.IO
                             }
                         }
                     }
-#if _DEBUG
+#if DEBUG
                     totalBytes += byteLen;
                     Debug.Assert(totalBytes <= len && byteLen <= _largeByteBuffer.Length, "BinaryWriter::Write(String) - More bytes encoded than expected!");
 #endif
@@ -407,7 +383,7 @@ namespace System.IO
                     charStart += charCount;
                     numLeft -= charCount;
                 }
-#if _DEBUG
+#if DEBUG
                 Debug.Assert(totalBytes == len, "BinaryWriter::Write(String) - Didn't write out all the bytes!");
 #endif
             }

@@ -1595,18 +1595,11 @@ void CodeGen::genCodeForLclVar(GenTreeLclVar* tree)
     // lcl_vars are not defs
     assert((tree->gtFlags & GTF_VAR_DEF) == 0);
 
-    if (isRegCandidate && !(tree->gtFlags & GTF_VAR_DEATH))
-    {
-        assert((tree->InReg()) || (tree->gtFlags & GTF_SPILLED));
-    }
-
     // If this is a register candidate that has been spilled, genConsumeReg() will
     // reload it at the point of use.  Otherwise, if it's not in a register, we load it here.
 
-    if (!tree->InReg() && !(tree->gtFlags & GTF_SPILLED))
+    if (!isRegCandidate && !(tree->gtFlags & GTF_SPILLED))
     {
-        assert(!isRegCandidate);
-
         // targetType must be a normal scalar type and not a TYP_STRUCT
         assert(targetType != TYP_STRUCT);
 
@@ -1637,7 +1630,6 @@ void CodeGen::genCodeForStoreLclFld(GenTreeLclFld* tree)
     unsigned offset = tree->gtLclOffs;
 
     // We must have a stack store with GT_STORE_LCL_FLD
-    noway_assert(!tree->InReg());
     noway_assert(targetReg == REG_NA);
 
     unsigned varNum = tree->gtLclNum;
@@ -1647,7 +1639,7 @@ void CodeGen::genCodeForStoreLclFld(GenTreeLclFld* tree)
     // Ensure that lclVar nodes are typed correctly.
     assert(!varDsc->lvNormalizeOnStore() || targetType == genActualType(varDsc->TypeGet()));
 
-    GenTreePtr data = tree->gtOp1->gtEffectiveVal();
+    GenTreePtr data = tree->gtOp1;
     genConsumeRegs(data);
 
     regNumber dataReg = REG_NA;
@@ -1695,7 +1687,7 @@ void CodeGen::genCodeForStoreLclVar(GenTreeLclVar* tree)
     // Ensure that lclVar nodes are typed correctly.
     assert(!varDsc->lvNormalizeOnStore() || targetType == genActualType(varDsc->TypeGet()));
 
-    GenTreePtr data = tree->gtOp1->gtEffectiveVal();
+    GenTreePtr data = tree->gtOp1;
 
     // var = call, where call returns a multi-reg return value
     // case is handled separately.
@@ -1745,221 +1737,6 @@ void CodeGen::genCodeForStoreLclVar(GenTreeLclVar* tree)
             genProduceReg(tree);
         }
     }
-}
-
-//------------------------------------------------------------------------
-// isStructReturn: Returns whether the 'treeNode' is returning a struct.
-//
-// Arguments:
-//    treeNode - The tree node to evaluate whether is a struct return.
-//
-// Return Value:
-//    Returns true if the 'treeNode" is a GT_RETURN node of type struct.
-//    Otherwise returns false.
-//
-bool CodeGen::isStructReturn(GenTreePtr treeNode)
-{
-    // This method could be called for 'treeNode' of GT_RET_FILT or GT_RETURN.
-    // For the GT_RET_FILT, the return is always
-    // a bool or a void, for the end of a finally block.
-    noway_assert(treeNode->OperGet() == GT_RETURN || treeNode->OperGet() == GT_RETFILT);
-
-    return varTypeIsStruct(treeNode);
-}
-
-//------------------------------------------------------------------------
-// genStructReturn: Generates code for returning a struct.
-//
-// Arguments:
-//    treeNode - The GT_RETURN tree node.
-//
-// Return Value:
-//    None
-//
-// Assumption:
-//    op1 of GT_RETURN node is either GT_LCL_VAR or multi-reg GT_CALL
-void CodeGen::genStructReturn(GenTreePtr treeNode)
-{
-    assert(treeNode->OperGet() == GT_RETURN);
-    assert(isStructReturn(treeNode));
-    GenTreePtr op1 = treeNode->gtGetOp1();
-
-    if (op1->OperGet() == GT_LCL_VAR)
-    {
-        GenTreeLclVarCommon* lclVar  = op1->AsLclVarCommon();
-        LclVarDsc*           varDsc  = &(compiler->lvaTable[lclVar->gtLclNum]);
-        var_types            lclType = genActualType(varDsc->TypeGet());
-
-        // Currently only multireg TYP_STRUCT types such as HFA's and 16-byte structs are supported
-        // In the future we could have FEATURE_SIMD types like TYP_SIMD16
-        assert(lclType == TYP_STRUCT);
-        assert(varDsc->lvIsMultiRegRet);
-
-        ReturnTypeDesc retTypeDesc;
-        unsigned       regCount;
-
-        retTypeDesc.InitializeStructReturnType(compiler, varDsc->lvVerTypeInfo.GetClassHandle());
-        regCount = retTypeDesc.GetReturnRegCount();
-
-        assert(regCount >= 2);
-        assert(op1->isContained());
-
-        // Copy var on stack into ABI return registers
-        int offset = 0;
-        for (unsigned i = 0; i < regCount; ++i)
-        {
-            var_types type = retTypeDesc.GetReturnRegType(i);
-            regNumber reg  = retTypeDesc.GetABIReturnReg(i);
-            getEmitter()->emitIns_R_S(ins_Load(type), emitTypeSize(type), reg, lclVar->gtLclNum, offset);
-            offset += genTypeSize(type);
-        }
-    }
-    else // op1 must be multi-reg GT_CALL
-    {
-        assert(op1->IsMultiRegCall() || op1->IsCopyOrReloadOfMultiRegCall());
-
-        genConsumeRegs(op1);
-
-        GenTree*     actualOp1 = op1->gtSkipReloadOrCopy();
-        GenTreeCall* call      = actualOp1->AsCall();
-
-        ReturnTypeDesc* pRetTypeDesc;
-        unsigned        regCount;
-        unsigned        matchingCount = 0;
-
-        pRetTypeDesc = call->GetReturnTypeDesc();
-        regCount     = pRetTypeDesc->GetReturnRegCount();
-
-        var_types regType[MAX_RET_REG_COUNT];
-        regNumber returnReg[MAX_RET_REG_COUNT];
-        regNumber allocatedReg[MAX_RET_REG_COUNT];
-        regMaskTP srcRegsMask       = 0;
-        regMaskTP dstRegsMask       = 0;
-        bool      needToShuffleRegs = false; // Set to true if we have to move any registers
-
-        for (unsigned i = 0; i < regCount; ++i)
-        {
-            regType[i]   = pRetTypeDesc->GetReturnRegType(i);
-            returnReg[i] = pRetTypeDesc->GetABIReturnReg(i);
-
-            regNumber reloadReg = REG_NA;
-            if (op1->IsCopyOrReload())
-            {
-                // GT_COPY/GT_RELOAD will have valid reg for those positions
-                // that need to be copied or reloaded.
-                reloadReg = op1->AsCopyOrReload()->GetRegNumByIdx(i);
-            }
-
-            if (reloadReg != REG_NA)
-            {
-                allocatedReg[i] = reloadReg;
-            }
-            else
-            {
-                allocatedReg[i] = call->GetRegNumByIdx(i);
-            }
-
-            if (returnReg[i] == allocatedReg[i])
-            {
-                matchingCount++;
-            }
-            else // We need to move this value
-            {
-                // We want to move the value from allocatedReg[i] into returnReg[i]
-                // so record these two registers in the src and dst masks
-                //
-                srcRegsMask |= genRegMask(allocatedReg[i]);
-                dstRegsMask |= genRegMask(returnReg[i]);
-
-                needToShuffleRegs = true;
-            }
-        }
-
-        if (needToShuffleRegs)
-        {
-            assert(matchingCount < regCount);
-
-            unsigned  remainingRegCount = regCount - matchingCount;
-            regMaskTP extraRegMask      = treeNode->gtRsvdRegs;
-
-            while (remainingRegCount > 0)
-            {
-                // set 'available' to the 'dst' registers that are not currently holding 'src' registers
-                //
-                regMaskTP availableMask = dstRegsMask & ~srcRegsMask;
-
-                regMaskTP dstMask;
-                regNumber srcReg;
-                regNumber dstReg;
-                var_types curType   = TYP_UNKNOWN;
-                regNumber freeUpReg = REG_NA;
-
-                if (availableMask == 0)
-                {
-                    // Circular register dependencies
-                    // So just free up the lowest register in dstRegsMask by moving it to the 'extra' register
-
-                    assert(dstRegsMask == srcRegsMask);         // this has to be true for us to reach here
-                    assert(extraRegMask != 0);                  // we require an 'extra' register
-                    assert((extraRegMask & ~dstRegsMask) != 0); // it can't be part of dstRegsMask
-
-                    availableMask = extraRegMask & ~dstRegsMask;
-
-                    regMaskTP srcMask = genFindLowestBit(srcRegsMask);
-                    freeUpReg         = genRegNumFromMask(srcMask);
-                }
-
-                dstMask = genFindLowestBit(availableMask);
-                dstReg  = genRegNumFromMask(dstMask);
-                srcReg  = REG_NA;
-
-                if (freeUpReg != REG_NA)
-                {
-                    // We will free up the srcReg by moving it to dstReg which is an extra register
-                    //
-                    srcReg = freeUpReg;
-
-                    // Find the 'srcReg' and set 'curType', change allocatedReg[] to dstReg
-                    // and add the new register mask bit to srcRegsMask
-                    //
-                    for (unsigned i = 0; i < regCount; ++i)
-                    {
-                        if (allocatedReg[i] == srcReg)
-                        {
-                            curType         = regType[i];
-                            allocatedReg[i] = dstReg;
-                            srcRegsMask |= genRegMask(dstReg);
-                        }
-                    }
-                }
-                else // The normal case
-                {
-                    // Find the 'srcReg' and set 'curType'
-                    //
-                    for (unsigned i = 0; i < regCount; ++i)
-                    {
-                        if (returnReg[i] == dstReg)
-                        {
-                            srcReg  = allocatedReg[i];
-                            curType = regType[i];
-                        }
-                    }
-                    // After we perform this move we will have one less registers to setup
-                    remainingRegCount--;
-                }
-                assert(curType != TYP_UNKNOWN);
-
-                inst_RV_RV(ins_Copy(curType), dstReg, srcReg, curType);
-
-                // Clear the appropriate bits in srcRegsMask and dstRegsMask
-                srcRegsMask &= ~genRegMask(srcReg);
-                dstRegsMask &= ~genRegMask(dstReg);
-
-            } // while (remainingRegCount > 0)
-
-        } // (needToShuffleRegs)
-
-    } // op1 must be multi-reg GT_CALL
 }
 
 //------------------------------------------------------------------------
@@ -2013,8 +1790,6 @@ void CodeGen::genReturn(GenTreePtr treeNode)
                 bool                 isRegCandidate = compiler->lvaTable[lcl->gtLclNum].lvIsRegCandidate();
                 if (isRegCandidate && ((op1->gtFlags & GTF_SPILLED) == 0))
                 {
-                    assert(op1->InReg());
-
                     // We may need to generate a zero-extending mov instruction to load the value from this GT_LCL_VAR
 
                     unsigned   lclNum  = lcl->gtLclNum;
@@ -2284,7 +2059,7 @@ void CodeGen::genLclHeap(GenTreePtr tree)
         //
         //  Loop:
         //       ldr   wzr, [SP + 0]           // tickle the page - read from the page
-        //       sub   regTmp, SP, PAGE_SIZE   // decrement SP by PAGE_SIZE
+        //       sub   regTmp, SP, GetOsPageSize()   // decrement SP by GetOsPageSize()
         //       cmp   regTmp, regCnt
         //       jb    Done
         //       mov   SP, regTmp
@@ -2313,7 +2088,7 @@ void CodeGen::genLclHeap(GenTreePtr tree)
         // tickle the page - Read from the updated SP - this triggers a page fault when on the guard page
         getEmitter()->emitIns_R_R_I(INS_ldr, EA_4BYTE, REG_ZR, REG_SPBASE, 0);
 
-        // decrement SP by PAGE_SIZE
+        // decrement SP by GetOsPageSize()
         getEmitter()->emitIns_R_R_I(INS_sub, EA_PTRSIZE, regTmp, REG_SPBASE, compiler->eeGetPageSize());
 
         getEmitter()->emitIns_R_R(INS_cmp, EA_PTRSIZE, regTmp, regCnt);
@@ -2565,7 +2340,7 @@ void CodeGen::genCodeForInitBlkUnroll(GenTreeBlk* initBlkNode)
 
     if (initBlkNode->gtFlags & GTF_BLK_VOLATILE)
     {
-        // issue a full memory barrier before volatile an initBlockUnroll operation
+        // issue a full memory barrier before a volatile initBlockUnroll operation
         instGen_MemoryBarrier();
     }
 
@@ -2714,7 +2489,7 @@ void CodeGen::genCodeForCpBlkUnroll(GenTreeBlk* cpBlkNode)
 
     if (cpBlkNode->gtFlags & GTF_BLK_VOLATILE)
     {
-        // issue a full memory barrier before & after a volatile CpBlkUnroll operation
+        // issue a full memory barrier before a volatile CpBlkUnroll operation
         instGen_MemoryBarrier();
     }
 
@@ -2794,8 +2569,8 @@ void CodeGen::genCodeForCpBlkUnroll(GenTreeBlk* cpBlkNode)
 
     if (cpBlkNode->gtFlags & GTF_BLK_VOLATILE)
     {
-        // issue a full memory barrier before & after a volatile CpBlkUnroll operation
-        instGen_MemoryBarrier();
+        // issue a INS_BARRIER_ISHLD after a volatile CpBlkUnroll operation
+        instGen_MemoryBarrier(INS_BARRIER_ISHLD);
     }
 }
 
@@ -2877,7 +2652,7 @@ void CodeGen::genCodeForCpObj(GenTreeObj* cpObjNode)
 
     if (cpObjNode->gtFlags & GTF_BLK_VOLATILE)
     {
-        // issue a full memory barrier before & after a volatile CpObj operation
+        // issue a full memory barrier before a volatile CpObj operation
         instGen_MemoryBarrier();
     }
 
@@ -2955,8 +2730,8 @@ void CodeGen::genCodeForCpObj(GenTreeObj* cpObjNode)
 
     if (cpObjNode->gtFlags & GTF_BLK_VOLATILE)
     {
-        // issue a full memory barrier before & after a volatile CpObj operation
-        instGen_MemoryBarrier();
+        // issue a INS_BARRIER_ISHLD after a volatile CpObj operation
+        instGen_MemoryBarrier(INS_BARRIER_ISHLD);
     }
 
     // Clear the gcInfo for REG_WRITE_BARRIER_SRC_BYREF and REG_WRITE_BARRIER_DST_BYREF.
@@ -3171,131 +2946,6 @@ instruction CodeGen::genGetInsForOper(genTreeOps oper, var_types type)
     return ins;
 }
 
-// produce code for a GT_LEA subnode
-void CodeGen::genLeaInstruction(GenTreeAddrMode* lea)
-{
-    genConsumeOperands(lea);
-    emitter* emit   = getEmitter();
-    emitAttr size   = emitTypeSize(lea);
-    unsigned offset = lea->gtOffset;
-
-    // In ARM64 we can only load addresses of the form:
-    //
-    // [Base + index*scale]
-    // [Base + Offset]
-    // [Literal] (PC-Relative)
-    //
-    // So for the case of a LEA node of the form [Base + Index*Scale + Offset] we will generate:
-    // destReg = baseReg + indexReg * scale;
-    // destReg = destReg + offset;
-    //
-    // TODO-ARM64-CQ: The purpose of the GT_LEA node is to directly reflect a single target architecture
-    //             addressing mode instruction.  Currently we're 'cheating' by producing one or more
-    //             instructions to generate the addressing mode so we need to modify lowering to
-    //             produce LEAs that are a 1:1 relationship to the ARM64 architecture.
-    if (lea->Base() && lea->Index())
-    {
-        GenTree* memBase = lea->Base();
-        GenTree* index   = lea->Index();
-        unsigned offset  = lea->gtOffset;
-
-        DWORD lsl;
-
-        assert(isPow2(lea->gtScale));
-        BitScanForward(&lsl, lea->gtScale);
-
-        assert(lsl <= 4);
-
-        if (offset != 0)
-        {
-            regNumber tmpReg = lea->GetSingleTempReg();
-
-            if (emitter::emitIns_valid_imm_for_add(offset, EA_8BYTE))
-            {
-                if (lsl > 0)
-                {
-                    // Generate code to set tmpReg = base + index*scale
-                    emit->emitIns_R_R_R_I(INS_add, size, tmpReg, memBase->gtRegNum, index->gtRegNum, lsl, INS_OPTS_LSL);
-                }
-                else // no scale
-                {
-                    // Generate code to set tmpReg = base + index
-                    emit->emitIns_R_R_R(INS_add, size, tmpReg, memBase->gtRegNum, index->gtRegNum);
-                }
-
-                // Then compute target reg from [tmpReg + offset]
-                emit->emitIns_R_R_I(INS_add, size, lea->gtRegNum, tmpReg, offset);
-            }
-            else // large offset
-            {
-                // First load/store tmpReg with the large offset constant
-                instGen_Set_Reg_To_Imm(EA_PTRSIZE, tmpReg, offset);
-                // Then add the base register
-                //      rd = rd + base
-                emit->emitIns_R_R_R(INS_add, size, tmpReg, tmpReg, memBase->gtRegNum);
-
-                noway_assert(tmpReg != index->gtRegNum);
-
-                // Then compute target reg from [tmpReg + index*scale]
-                emit->emitIns_R_R_R_I(INS_add, size, lea->gtRegNum, tmpReg, index->gtRegNum, lsl, INS_OPTS_LSL);
-            }
-        }
-        else
-        {
-            if (lsl > 0)
-            {
-                // Then compute target reg from [base + index*scale]
-                emit->emitIns_R_R_R_I(INS_add, size, lea->gtRegNum, memBase->gtRegNum, index->gtRegNum, lsl,
-                                      INS_OPTS_LSL);
-            }
-            else
-            {
-                // Then compute target reg from [base + index]
-                emit->emitIns_R_R_R(INS_add, size, lea->gtRegNum, memBase->gtRegNum, index->gtRegNum);
-            }
-        }
-    }
-    else if (lea->Base())
-    {
-        GenTree* memBase = lea->Base();
-
-        if (emitter::emitIns_valid_imm_for_add(offset, EA_8BYTE))
-        {
-            if (offset != 0)
-            {
-                // Then compute target reg from [memBase + offset]
-                emit->emitIns_R_R_I(INS_add, size, lea->gtRegNum, memBase->gtRegNum, offset);
-            }
-            else // offset is zero
-            {
-                emit->emitIns_R_R(INS_mov, size, lea->gtRegNum, memBase->gtRegNum);
-            }
-        }
-        else
-        {
-            // We require a tmpReg to hold the offset
-            regNumber tmpReg = lea->GetSingleTempReg();
-
-            // First load tmpReg with the large offset constant
-            instGen_Set_Reg_To_Imm(EA_PTRSIZE, tmpReg, offset);
-
-            // Then compute target reg from [memBase + tmpReg]
-            emit->emitIns_R_R_R(INS_add, size, lea->gtRegNum, memBase->gtRegNum, tmpReg);
-        }
-    }
-    else if (lea->Index())
-    {
-        // If we encounter a GT_LEA node without a base it means it came out
-        // when attempting to optimize an arbitrary arithmetic expression during lower.
-        // This is currently disabled in ARM64 since we need to adjust lower to account
-        // for the simpler instructions ARM64 supports.
-        // TODO-ARM64-CQ:  Fix this and let LEA optimize arithmetic trees too.
-        assert(!"We shouldn't see a baseless address computation during CodeGen for ARM64");
-    }
-
-    genProduceReg(lea);
-}
-
 //------------------------------------------------------------------------
 // genCodeForReturnTrap: Produce code for a GT_RETURNTRAP node.
 //
@@ -3331,10 +2981,12 @@ void CodeGen::genCodeForReturnTrap(GenTreeOp* tree)
 //
 void CodeGen::genCodeForStoreInd(GenTreeStoreInd* tree)
 {
-    GenTree*  data       = tree->Data();
-    GenTree*  addr       = tree->Addr();
-    var_types targetType = tree->TypeGet();
-    emitter*  emit       = getEmitter();
+    GenTree*    data       = tree->Data();
+    GenTree*    addr       = tree->Addr();
+    var_types   targetType = tree->TypeGet();
+    emitter*    emit       = getEmitter();
+    emitAttr    attr       = emitTypeSize(tree);
+    instruction ins        = ins_Store(targetType);
 
     GCInfo::WriteBarrierForm writeBarrierForm = gcInfo.gcIsWriteBarrierCandidate(tree, data);
     if (writeBarrierForm != GCInfo::WBF_NoBarrier)
@@ -3407,13 +3059,42 @@ void CodeGen::genCodeForStoreInd(GenTreeStoreInd* tree)
             dataReg = data->gtRegNum;
         }
 
+        assert((attr != EA_1BYTE) || !(tree->gtFlags & GTF_IND_UNALIGNED));
+
         if (tree->gtFlags & GTF_IND_VOLATILE)
         {
-            // issue a full memory barrier a before volatile StInd
-            instGen_MemoryBarrier();
+            bool useStoreRelease =
+                genIsValidIntReg(dataReg) && !addr->isContained() && !(tree->gtFlags & GTF_IND_UNALIGNED);
+
+            if (useStoreRelease)
+            {
+                switch (EA_SIZE(attr))
+                {
+                    case EA_1BYTE:
+                        assert(ins == INS_strb);
+                        ins = INS_stlrb;
+                        break;
+                    case EA_2BYTE:
+                        assert(ins == INS_strh);
+                        ins = INS_stlrh;
+                        break;
+                    case EA_4BYTE:
+                    case EA_8BYTE:
+                        assert(ins == INS_str);
+                        ins = INS_stlr;
+                        break;
+                    default:
+                        assert(false); // We should not get here
+                }
+            }
+            else
+            {
+                // issue a full memory barrier before a volatile StInd
+                instGen_MemoryBarrier();
+            }
         }
 
-        emit->emitInsLoadStoreOp(ins_Store(targetType), emitTypeSize(tree), dataReg, tree);
+        emit->emitInsLoadStoreOp(ins, attr, dataReg, tree);
     }
 }
 

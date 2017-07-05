@@ -29,6 +29,7 @@ namespace System
     };
 
     [Serializable]
+    [System.Runtime.CompilerServices.TypeForwardedFrom("System.Core, Version=3.5.0.0, Culture=Neutral, PublicKeyToken=b77a5c561934e089")]
     public sealed partial class TimeZoneInfo : IEquatable<TimeZoneInfo>, ISerializable, IDeserializationCallback
     {
         private enum TimeZoneInfoResult
@@ -1012,7 +1013,24 @@ namespace System
 
         void IDeserializationCallback.OnDeserialization(object sender)
         {
-            throw new PlatformNotSupportedException();
+            try
+            {
+                bool adjustmentRulesSupportDst;
+                ValidateTimeZoneInfo(_id, _baseUtcOffset, _adjustmentRules, out adjustmentRulesSupportDst);
+
+                if (adjustmentRulesSupportDst != _supportsDaylightSavingTime)
+                {
+                    throw new SerializationException(SR.Format(SR.Serialization_CorruptField, "SupportsDaylightSavingTime"));
+                }
+            }
+            catch (ArgumentException e)
+            {
+                throw new SerializationException(SR.Serialization_InvalidData, e);
+            }
+            catch (InvalidTimeZoneException e)
+            {
+                throw new SerializationException(SR.Serialization_InvalidData, e);
+            }
         }
 
         void ISerializable.GetObjectData(SerializationInfo info, StreamingContext context)
@@ -1023,13 +1041,13 @@ namespace System
             }
             Contract.EndContractBlock();
 
-            info.AddValue("Id", _id);
-            info.AddValue("DisplayName", _displayName);
-            info.AddValue("StandardName", _standardDisplayName);
-            info.AddValue("DaylightName", _daylightDisplayName);
-            info.AddValue("BaseUtcOffset", _baseUtcOffset);
-            info.AddValue("AdjustmentRules", _adjustmentRules);
-            info.AddValue("SupportsDaylightSavingTime", _supportsDaylightSavingTime);
+            info.AddValue("Id", _id); // Do not rename (binary serialization)
+            info.AddValue("DisplayName", _displayName); // Do not rename (binary serialization)
+            info.AddValue("StandardName", _standardDisplayName); // Do not rename (binary serialization)
+            info.AddValue("DaylightName", _daylightDisplayName); // Do not rename (binary serialization)
+            info.AddValue("BaseUtcOffset", _baseUtcOffset); // Do not rename (binary serialization)
+            info.AddValue("AdjustmentRules", _adjustmentRules); // Do not rename (binary serialization)
+            info.AddValue("SupportsDaylightSavingTime", _supportsDaylightSavingTime); // Do not rename (binary serialization)
         }
 
         private TimeZoneInfo(SerializationInfo info, StreamingContext context)
@@ -1039,13 +1057,13 @@ namespace System
                 throw new ArgumentNullException(nameof(info));
             }
 
-            _id = (string)info.GetValue("Id", typeof(string));
-            _displayName = (string)info.GetValue("DisplayName", typeof(string));
-            _standardDisplayName = (string)info.GetValue("StandardName", typeof(string));
-            _daylightDisplayName = (string)info.GetValue("DaylightName", typeof(string));
-            _baseUtcOffset = (TimeSpan)info.GetValue("BaseUtcOffset", typeof(TimeSpan));
-            _adjustmentRules = (AdjustmentRule[])info.GetValue("AdjustmentRules", typeof(AdjustmentRule[]));
-            _supportsDaylightSavingTime = (bool)info.GetValue("SupportsDaylightSavingTime", typeof(bool));
+            _id = (string)info.GetValue("Id", typeof(string)); // Do not rename (binary serialization)
+            _displayName = (string)info.GetValue("DisplayName", typeof(string)); // Do not rename (binary serialization)
+            _standardDisplayName = (string)info.GetValue("StandardName", typeof(string)); // Do not rename (binary serialization)
+            _daylightDisplayName = (string)info.GetValue("DaylightName", typeof(string)); // Do not rename (binary serialization)
+            _baseUtcOffset = (TimeSpan)info.GetValue("BaseUtcOffset", typeof(TimeSpan)); // Do not rename (binary serialization)
+            _adjustmentRules = (AdjustmentRule[])info.GetValue("AdjustmentRules", typeof(AdjustmentRule[])); // Do not rename (binary serialization)
+            _supportsDaylightSavingTime = (bool)info.GetValue("SupportsDaylightSavingTime", typeof(bool)); // Do not rename (binary serialization)
         }
 
         private AdjustmentRule GetAdjustmentRuleForTime(DateTime dateTime, out int? ruleIndex)

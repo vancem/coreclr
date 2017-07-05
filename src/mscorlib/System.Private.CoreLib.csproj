@@ -434,7 +434,7 @@
     <Compile Include="$(BclSourcesRoot)\System\Reflection\Emit\PEFileKinds.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Reflection\Emit\OpCodes.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Reflection\Emit\Opcode.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Reflection\Emit\OpcodeType.cs" />
+    <Compile Include="$(BclSourcesRoot)\System\Reflection\Emit\OpCodeType.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Reflection\Emit\StackBehaviour.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Reflection\Emit\OperandType.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Reflection\Emit\FlowControl.cs" />
@@ -499,7 +499,6 @@
     <Compile Include="$(BclSourcesRoot)\System\Threading\SpinWait.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Threading\LazyInitializer.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Threading\ThreadLocal.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Threading\ReaderWriterLockSlim.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Threading\SemaphoreSlim.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Threading\ManualResetEventSlim.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Threading\CancellationTokenRegistration.cs" />
@@ -531,7 +530,6 @@
     <Compile Include="$(BclSourcesRoot)\System\IO\__Error.cs" />
     <Compile Include="$(BclSourcesRoot)\System\IO\__HResults.cs" />
     <Compile Include="$(BclSourcesRoot)\System\IO\BinaryReader.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\IO\BinaryWriter.cs" />
     <Compile Include="$(BclSourcesRoot)\System\IO\Directory.cs" />
     <Compile Include="$(BclSourcesRoot)\System\IO\SearchOption.cs" />
     <Compile Include="$(BclSourcesRoot)\System\IO\DriveNotFoundException.cs" />
@@ -617,7 +615,6 @@
     <Compile Include="$(BclSourcesRoot)\System\Resources\__HResults.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Resources\FileBasedResourceGroveler.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Resources\IResourceGroveler.cs" />
-    <Compile Include="$(BclSourcesRoot)\System\Resources\LooselyLinkedResourceReference.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Resources\ManifestBasedResourceGroveler.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Resources\ResourceManager.cs" />
     <Compile Include="$(BclSourcesRoot)\System\Resources\ResourceReader.cs" />

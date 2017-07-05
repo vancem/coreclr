@@ -1383,10 +1383,18 @@ void fgArgInfo::SplitArg(unsigned argNum, unsigned numRegs, unsigned numSlots)
     assert(numRegs > 0);
     assert(numSlots > 0);
 
-    curArgTabEntry->isSplit  = true;
-    curArgTabEntry->numRegs  = numRegs;
-    curArgTabEntry->numSlots = numSlots;
-
+    if (argsComplete)
+    {
+        assert(curArgTabEntry->isSplit == true);
+        assert(curArgTabEntry->numRegs == numRegs);
+        assert(curArgTabEntry->numSlots == numSlots);
+    }
+    else
+    {
+        curArgTabEntry->isSplit  = true;
+        curArgTabEntry->numRegs  = numRegs;
+        curArgTabEntry->numSlots = numSlots;
+    }
     nextSlotNum += numSlots;
 }
 
@@ -1431,6 +1439,13 @@ void fgArgInfo::ArgsComplete()
             continue;
 #endif
         }
+#if defined(_TARGET_ARM_) && !defined(LEGACY_BACKEND)
+        else if (curArgTabEntry->isSplit)
+        {
+            hasStructRegArg = true;
+            hasStackArgs    = true;
+        }
+#endif
         else // we have a register argument, next we look for a struct type.
         {
             if (varTypeIsStruct(argx) FEATURE_UNIX_AMD64_STRUCT_PASSING_ONLY(|| curArgTabEntry->isStruct))
@@ -1549,6 +1564,12 @@ void fgArgInfo::ArgsComplete()
                 {
                     prevArgTabEntry->needPlace = true;
                 }
+#if defined(_TARGET_ARM_) && !defined(LEGACY_BACKEND)
+                else if (prevArgTabEntry->isSplit)
+                {
+                    prevArgTabEntry->needPlace = true;
+                }
+#endif
 #endif
             }
         }
@@ -1557,9 +1578,6 @@ void fgArgInfo::ArgsComplete()
 #if FEATURE_MULTIREG_ARGS
         // For RyuJIT backend we will expand a Multireg arg into a GT_FIELD_LIST
         // with multiple indirections, so here we consider spilling it into a tmp LclVar.
-        //
-        // Note that Arm32 is a LEGACY_BACKEND and it defines FEATURE_MULTIREG_ARGS
-        // so we skip this for ARM32 until it is ported to use RyuJIT backend
         //
 
         bool isMultiRegArg = (curArgTabEntry->numRegs > 1);
@@ -1571,6 +1589,10 @@ void fgArgInfo::ArgsComplete()
                 // Spill multireg struct arguments that have Assignments or Calls embedded in them
                 curArgTabEntry->needTmp = true;
             }
+#ifndef _TARGET_ARM_
+            // TODO-Arm: This optimization is not implemented for ARM32
+            // so we skip this for ARM32 until it is ported to use RyuJIT backend
+            //
             else
             {
                 // We call gtPrepareCost to measure the cost of evaluating this tree
@@ -1602,7 +1624,6 @@ void fgArgInfo::ArgsComplete()
                                 curArgTabEntry->needTmp = true;
                             }
                             break;
-
                         case 11:
                         case 13:
                         case 14:
@@ -1624,6 +1645,7 @@ void fgArgInfo::ArgsComplete()
                     }
                 }
             }
+#endif // !_TARGET_ARM_
         }
 #endif // FEATURE_MULTIREG_ARGS
 #endif // LEGACY_BACKEND
@@ -2040,7 +2062,7 @@ GenTreePtr Compiler::fgMakeTmpArgNode(
     if (varTypeIsStruct(type))
     {
 
-#if defined(_TARGET_AMD64_) || defined(_TARGET_ARM64_)
+#if defined(_TARGET_AMD64_) || defined(_TARGET_ARM64_) || (!defined(LEGACY_BACKEND) && defined(_TARGET_ARM_))
 
 #ifdef FEATURE_UNIX_AMD64_STRUCT_PASSING
 
@@ -2104,7 +2126,7 @@ GenTreePtr Compiler::fgMakeTmpArgNode(
 #endif // FEATURE_MULTIREG_ARGS
         }
 
-#else // not (_TARGET_AMD64_ or _TARGET_ARM64_)
+#else // not (_TARGET_AMD64_ or _TARGET_ARM64_ or (!LEGACY_BACKEND and _TARGET_ARM_))
 
         // other targets, we pass the struct by value
         assert(varTypeIsStruct(type));
@@ -2115,7 +2137,7 @@ GenTreePtr Compiler::fgMakeTmpArgNode(
         // gtNewObjNode will set the GTF_EXCEPT flag if this is not a local stack object.
         arg = gtNewObjNode(lvaGetStruct(tmpVarNum), addrNode);
 
-#endif // not (_TARGET_AMD64_ or _TARGET_ARM64_)
+#endif // not (_TARGET_AMD64_ or _TARGET_ARM64_ or (!LEGACY_BACKEND and _TARGET_ARM_))
 
     } // (varTypeIsStruct(type))
 
@@ -2254,17 +2276,17 @@ void fgArgInfo::EvalArgsToTemps()
                     if (setupArg->OperIsCopyBlkOp())
                     {
                         setupArg = compiler->fgMorphCopyBlock(setupArg);
-#ifdef _TARGET_ARM64_
-                        // This scalar LclVar widening step is only performed for ARM64
+#if defined(_TARGET_ARM64_) || (!defined(LEGACY_BACKEND) && defined(_TARGET_ARM_))
+                        // This scalar LclVar widening step is only performed for ARM architectures.
                         //
                         CORINFO_CLASS_HANDLE clsHnd     = compiler->lvaGetStruct(tmpVarNum);
                         unsigned             structSize = varDsc->lvExactSize;
 
                         scalarType = compiler->getPrimitiveTypeForStruct(structSize, clsHnd);
-#endif // _TARGET_ARM64_
+#endif // _TARGET_ARM*_
                     }
 
-                    // scalarType can be set to a wider type for ARM64: (3 => 4)  or (5,6,7 => 8)
+                    // scalarType can be set to a wider type for ARM architectures: (3 => 4)  or (5,6,7 => 8)
                     if ((scalarType != TYP_UNKNOWN) && (scalarType != lclVarType))
                     {
                         // Create a GT_LCL_FLD using the wider type to go to the late argument list
@@ -2931,7 +2953,7 @@ GenTreeCall* Compiler::fgMorphArgs(GenTreeCall* call)
             call->gtCallArgs = gtNewListNode(arg, call->gtCallArgs);
             numArgs++;
 
-            nonStandardArgs.Add(arg, REG_VIRTUAL_STUB_PARAM);
+            nonStandardArgs.Add(arg, virtualStubParamInfo->GetReg());
         }
         else
 #endif // defined(_TARGET_X86_)
@@ -3407,11 +3429,7 @@ GenTreeCall* Compiler::fgMorphArgs(GenTreeCall* call)
                     size = (unsigned)(roundUp(info.compCompHnd->getClassSize(argx->gtArgPlace.gtArgPlaceClsHnd),
                                               TARGET_POINTER_SIZE)) /
                            TARGET_POINTER_SIZE;
-                    if (isHfaArg)
-                    {
-                        hasMultiregStructArgs = true;
-                    }
-                    else if (size > 1 && size <= 4)
+                    if (isHfaArg || size > 1)
                     {
                         hasMultiregStructArgs = true;
                     }
@@ -3798,18 +3816,11 @@ GenTreeCall* Compiler::fgMorphArgs(GenTreeCall* call)
                     hasMultiregStructArgs = true;
                 }
 #elif defined(_TARGET_ARM_)
-                // TODO-Arm: Need to handle the case
-                // where structs passed by value can be split between registers and stack.
-                if (size > 1 && size <= 4)
+                // Build the mkrefany as a GT_FIELD_LIST in this function
+                if (size > 1 && argx->gtOper != GT_MKREFANY)
                 {
                     hasMultiregStructArgs = true;
                 }
-#ifndef LEGACY_BACKEND
-                else if (size > 4 && passUsingIntRegs)
-                {
-                    NYI_ARM("Struct can be split between registers and stack");
-                }
-#endif // !LEGACY_BACKEND
 #endif // _TARGET_ARM_
             }
 
@@ -4102,9 +4113,6 @@ GenTreeCall* Compiler::fgMorphArgs(GenTreeCall* call)
 #ifdef _TARGET_ARM_
                         if (fltArgRegNum > MAX_FLOAT_REG_ARG)
                         {
-#ifndef LEGACY_BACKEND
-                            NYI_ARM("Struct split between float registers and stack");
-#endif // !LEGACY_BACKEND
                             // This indicates a partial enregistration of a struct type
                             assert(varTypeIsStruct(argx));
                             unsigned numRegsPartial = size - (fltArgRegNum - MAX_FLOAT_REG_ARG);
@@ -4134,11 +4142,8 @@ GenTreeCall* Compiler::fgMorphArgs(GenTreeCall* call)
 #ifdef _TARGET_ARM_
                         if (intArgRegNum > MAX_REG_ARG)
                         {
-#ifndef LEGACY_BACKEND
-                            NYI_ARM("Struct split between integer registers and stack");
-#endif // !LEGACY_BACKEND
                             // This indicates a partial enregistration of a struct type
-                            assert((isStructArg) || argx->OperIsCopyBlkOp() ||
+                            assert((isStructArg) || argx->OperIsFieldList() || argx->OperIsCopyBlkOp() ||
                                    (argx->gtOper == GT_COMMA && (args->gtFlags & GTF_ASG)));
                             unsigned numRegsPartial = size - (intArgRegNum - MAX_REG_ARG);
                             assert((unsigned char)numRegsPartial == numRegsPartial);
@@ -4758,6 +4763,25 @@ GenTreePtr Compiler::fgMorphMultiregStructArg(GenTreePtr arg, fgArgTabEntryPtr f
 
 #ifndef _TARGET_ARMARCH_
     NYI("fgMorphMultiregStructArg requires implementation for this target");
+#endif
+
+#ifdef _TARGET_ARM_
+    if (fgEntryPtr->isSplit)
+    {
+        if (fgEntryPtr->isHfaRegArg)
+        {
+            // We cannot handle HFA split struct morphed to GT_FIELD_LIST yet
+            NYI_ARM("Struct split between float registers and stack");
+        }
+        else if (fgEntryPtr->numSlots + fgEntryPtr->numRegs > 4)
+        {
+            return arg;
+        }
+    }
+    else if (!fgEntryPtr->isHfaRegArg && fgEntryPtr->numSlots > 4)
+    {
+        return arg;
+    }
 #endif
 
 #if FEATURE_MULTIREG_ARGS
@@ -6123,7 +6147,7 @@ GenTreePtr Compiler::fgMorphStackArgForVarArgs(unsigned lclNum, var_types varTyp
 
 GenTreePtr Compiler::fgMorphLocalVar(GenTreePtr tree, bool forceRemorph)
 {
-    noway_assert(tree->gtOper == GT_LCL_VAR);
+    assert(tree->gtOper == GT_LCL_VAR);
 
     unsigned   lclNum  = tree->gtLclVarCommon.gtLclNum;
     var_types  varType = lvaGetRealType(lclNum);
@@ -7150,8 +7174,11 @@ void Compiler::fgMorphTailCall(GenTreeCall* call)
 
         /* Get the appropriate vtable chunk */
 
-        add  = gtNewOperNode(GT_ADD, TYP_I_IMPL, vtbl, gtNewIconNode(vtabOffsOfIndirection, TYP_I_IMPL));
-        vtbl = gtNewOperNode(GT_IND, TYP_I_IMPL, add);
+        if (vtabOffsOfIndirection != CORINFO_VIRTUALCALL_NO_CHUNK)
+        {
+            add  = gtNewOperNode(GT_ADD, TYP_I_IMPL, vtbl, gtNewIconNode(vtabOffsOfIndirection, TYP_I_IMPL));
+            vtbl = gtNewOperNode(GT_IND, TYP_I_IMPL, add);
+        }
 
         /* Now the appropriate vtable slot */
 
@@ -7171,7 +7198,9 @@ void Compiler::fgMorphTailCall(GenTreeCall* call)
     // Now inject a placeholder for the real call target that codegen
     // will generate
     GenTreePtr arg = new (this, GT_NOP) GenTreeOp(GT_NOP, TYP_I_IMPL);
+#ifdef LEGACY_BACKEND
     codeGen->genMarkTreeInReg(arg, REG_TAILCALL_ADDR);
+#endif
     call->gtCallArgs = gtNewListNode(arg, call->gtCallArgs);
 
     // Lastly inject the pointer for the copy routine
@@ -8282,25 +8311,9 @@ NO_TAIL_CALL:
     // having a call (for computing full interruptibility).
     CLANG_FORMAT_COMMENT_ANCHOR;
 
-#ifdef _TARGET_AMD64_
-    // Amd64 note: If this is a fast tail call then don't count it as a call
-    // since we don't insert GC-polls but instead make the method fully GC
-    // interruptible.
-    if (!call->IsFastTailCall())
-#endif
+    if (IsGcSafePoint(call))
     {
-        if (call->gtCallType == CT_INDIRECT)
-        {
-            compCurBB->bbFlags |= BBF_GC_SAFE_POINT;
-        }
-        else if (call->gtCallType == CT_USER_FUNC)
-        {
-            if ((call->gtCallMoreFlags & GTF_CALL_M_NOGCCHECK) == 0)
-            {
-                compCurBB->bbFlags |= BBF_GC_SAFE_POINT;
-            }
-        }
-        // otherwise we have a CT_HELPER
+        compCurBB->bbFlags |= BBF_GC_SAFE_POINT;
     }
 
     // Morph Type.op_Equality and Type.op_Inequality
@@ -8544,7 +8557,7 @@ NO_TAIL_CALL:
 
 GenTreePtr Compiler::fgMorphConst(GenTreePtr tree)
 {
-    noway_assert(tree->OperKind() & GTK_CONST);
+    assert(tree->OperKind() & GTK_CONST);
 
     /* Clear any exception flags or other unnecessary flags
      * that may have been set before folding this node to a constant */
@@ -8601,7 +8614,7 @@ GenTreePtr Compiler::fgMorphConst(GenTreePtr tree)
 
 GenTreePtr Compiler::fgMorphLeaf(GenTreePtr tree)
 {
-    noway_assert(tree->OperKind() & GTK_LEAF);
+    assert(tree->OperKind() & GTK_LEAF);
 
     if (tree->gtOper == GT_LCL_VAR)
     {
@@ -10330,7 +10343,6 @@ GenTreePtr Compiler::fgMorphCopyBlock(GenTreePtr tree)
 
             tree = gtNewAssignNode(gtNewLclvNode(addrSpillTemp, TYP_BYREF), addrSpill);
 
-#ifndef LEGACY_BACKEND
             // If we are assigning the address of a LclVar here
             // liveness does not account for this kind of address taken use.
             //
@@ -10348,7 +10360,6 @@ GenTreePtr Compiler::fgMorphCopyBlock(GenTreePtr tree)
                     lvaSetVarDoNotEnregister(lclVarNum DEBUGARG(DNER_AddrExposed));
                 }
             }
-#endif // !LEGACY_BACKEND
         }
 
     _AssignFields:
@@ -10590,32 +10601,49 @@ GenTree* Compiler::fgMorphForRegisterFP(GenTree* tree)
     return tree;
 }
 
+//--------------------------------------------------------------------------------------------------------------
+// fgMorphRecognizeBoxNullable:
+//   Recognize this pattern:
+//
+//   stmtExpr  void  (IL 0x000...  ???)
+//     return    int
+//             CNS_INT     ref    null
+//         EQ/NE/GT        int
+//             CALL help ref    HELPER.CORINFO_HELP_BOX_NULLABLE
+//                 CNS_INT(h)  long   0x7fed96836c8 class
+//                 ADDR      byref
+//                     FIELD struct value
+//                         LCL_VAR ref V00 this
+//
+//   which comes from this code:
+//
+//      return this.value==null;
+//
+//   and transform it into
+//
+//   stmtExpr  void  (IL 0x000...  ???)
+//     return    int
+//             CNS_INT     ref    null
+//         EQ/NE/GT        int
+//             IND bool
+//                 ADDR      byref
+//                     FIELD struct value
+//                         LCL_VAR ref V00 this
+//
+// Arguments:
+//       compare - Compare tree to optimize.
+//
+// return value:
+//       A tree that has a call to CORINFO_HELP_BOX_NULLABLE optimized away if the pattern is found;
+//       the original tree otherwise.
+//
+
 GenTree* Compiler::fgMorphRecognizeBoxNullable(GenTree* compare)
 {
     GenTree*     op1 = compare->gtOp.gtOp1;
     GenTree*     op2 = compare->gtOp.gtOp2;
     GenTree*     opCns;
     GenTreeCall* opCall;
-
-    // recognize this pattern:
-    //
-    // stmtExpr  void  (IL 0x000...  ???)
-    //     return    int
-    //             const     ref    null
-    //         ==        int
-    //             call help ref    HELPER.CORINFO_HELP_BOX_NULLABLE
-    //                 const(h)  long   0x7fed96836c8 class
-    //                 addr      byref
-    //                     ld.lclVar struct V00 arg0
-    //
-    //
-    // which comes from this code (reported by customer as being slow) :
-    //
-    // private static bool IsNull<T>(T arg)
-    // {
-    //    return arg==null;
-    // }
-    //
 
     if (op1->IsCnsIntOrI() && op2->IsHelperCall())
     {
@@ -10642,8 +10670,17 @@ GenTree* Compiler::fgMorphRecognizeBoxNullable(GenTree* compare)
         return compare;
     }
 
-    // replace the box with an access of the nullable 'hasValue' field which is at the zero offset
-    GenTree* newOp = gtNewOperNode(GT_IND, TYP_BOOL, opCall->gtCall.gtCallArgs->gtOp.gtOp2->gtOp.gtOp1);
+    // Get the nullable struct argument
+    GenTree* arg = opCall->gtCall.gtCallArgs->gtOp.gtOp2->gtOp.gtOp1;
+
+    // Check for cases that are unsafe to optimize and return the unchanged tree
+    if (arg->IsArgPlaceHolderNode() || arg->IsNothingNode() || ((arg->gtFlags & GTF_LATE_ARG) != 0))
+    {
+        return compare;
+    }
+
+    // Replace the box with an access of the nullable 'hasValue' field which is at the zero offset
+    GenTree* newOp = gtNewOperNode(GT_IND, TYP_BOOL, arg);
 
     if (opCall == op1)
     {
@@ -10847,7 +10884,7 @@ GenTreePtr Compiler::fgMorphSmpOp(GenTreePtr tree, MorphAddrContext* mac)
     // flow and gcc thinks that the function never returns
     {
         ALLOCA_CHECK();
-        noway_assert(tree->OperKind() & GTK_SMPOP);
+        assert(tree->OperKind() & GTK_SMPOP);
 
         /* The steps in this function are :
            o Perform required preorder processing
@@ -11341,7 +11378,6 @@ GenTreePtr Compiler::fgMorphSmpOp(GenTreePtr tree, MorphAddrContext* mac)
                 // Note that gtFoldExpr may return a non-leaf even if successful
                 // e.g. for something like "expr / 1" - see also bug #290853
                 if (tree->OperIsLeaf() || (oldTree != tree))
-
                 {
                     return (oldTree != tree) ? fgMorphTree(tree) : fgMorphLeaf(tree);
                 }
@@ -11502,7 +11538,17 @@ GenTreePtr Compiler::fgMorphSmpOp(GenTreePtr tree, MorphAddrContext* mac)
                         }
                     }
                 }
-                fgMorphRecognizeBoxNullable(tree);
+
+                __fallthrough;
+
+            case GT_GT:
+
+                // Try to optimize away calls to CORINFO_HELP_BOX_NULLABLE for GT_EQ, GT_NE, and unsigned GT_GT.
+                if ((oper != GT_GT) || tree->IsUnsigned())
+                {
+                    fgMorphRecognizeBoxNullable(tree);
+                }
+
                 op1 = tree->gtOp.gtOp1;
                 op2 = tree->gtGetOp2IfPresent();
 
@@ -11678,7 +11724,7 @@ GenTreePtr Compiler::fgMorphSmpOp(GenTreePtr tree, MorphAddrContext* mac)
              *
              * NOTE: Don't reset the exception flags on nodes that may throw */
 
-            noway_assert(tree->gtOper != GT_CALL);
+            assert(tree->gtOper != GT_CALL);
 
             if ((tree->gtOper != GT_INTRINSIC) || !IsIntrinsicImplementedByUserCall(tree->gtIntrinsic.gtIntrinsicId))
             {
@@ -13569,7 +13615,7 @@ GenTreePtr Compiler::fgMorphSmpOp(GenTreePtr tree, MorphAddrContext* mac)
                 break;
         }
 
-        noway_assert(oper == tree->gtOper);
+        assert(oper == tree->gtOper);
 
         // If we are in the Valuenum CSE phase then don't morph away anything as these
         // nodes may have CSE defs/uses in them.
@@ -14788,11 +14834,11 @@ GenTreePtr Compiler::fgMorphToEmulatedFP(GenTreePtr tree)
 
         if (typ == TYP_DOUBLE)
         {
-            noway_assert(CPX_R4_NEG + 1 == CPX_R8_NEG);
-            noway_assert(CPX_R4_ADD + 1 == CPX_R8_ADD);
-            noway_assert(CPX_R4_SUB + 1 == CPX_R8_SUB);
-            noway_assert(CPX_R4_MUL + 1 == CPX_R8_MUL);
-            noway_assert(CPX_R4_DIV + 1 == CPX_R8_DIV);
+            static_assert_no_msg(CPX_R4_NEG + 1 == CPX_R8_NEG);
+            static_assert_no_msg(CPX_R4_ADD + 1 == CPX_R8_ADD);
+            static_assert_no_msg(CPX_R4_SUB + 1 == CPX_R8_SUB);
+            static_assert_no_msg(CPX_R4_MUL + 1 == CPX_R8_MUL);
+            static_assert_no_msg(CPX_R4_DIV + 1 == CPX_R8_DIV);
 
             helper++;
         }
@@ -14800,12 +14846,12 @@ GenTreePtr Compiler::fgMorphToEmulatedFP(GenTreePtr tree)
         {
             noway_assert(tree->OperIsCompare());
 
-            noway_assert(CPX_R4_EQ + 1 == CPX_R8_EQ);
-            noway_assert(CPX_R4_NE + 1 == CPX_R8_NE);
-            noway_assert(CPX_R4_LT + 1 == CPX_R8_LT);
-            noway_assert(CPX_R4_LE + 1 == CPX_R8_LE);
-            noway_assert(CPX_R4_GE + 1 == CPX_R8_GE);
-            noway_assert(CPX_R4_GT + 1 == CPX_R8_GT);
+            static_assert_no_msg(CPX_R4_EQ + 1 == CPX_R8_EQ);
+            static_assert_no_msg(CPX_R4_NE + 1 == CPX_R8_NE);
+            static_assert_no_msg(CPX_R4_LT + 1 == CPX_R8_LT);
+            static_assert_no_msg(CPX_R4_LE + 1 == CPX_R8_LE);
+            static_assert_no_msg(CPX_R4_GE + 1 == CPX_R8_GE);
+            static_assert_no_msg(CPX_R4_GT + 1 == CPX_R8_GT);
         }
 
         tree = fgMorphIntoHelperCall(tree, helper, args);
@@ -14870,8 +14916,8 @@ GenTreePtr Compiler::fgMorphToEmulatedFP(GenTreePtr tree)
 
 GenTreePtr Compiler::fgMorphTree(GenTreePtr tree, MorphAddrContext* mac)
 {
-    noway_assert(tree);
-    noway_assert(tree->gtOper != GT_STMT);
+    assert(tree);
+    assert(tree->gtOper != GT_STMT);
 
 #ifdef DEBUG
     if (verbose)
@@ -14970,7 +15016,7 @@ GenTreePtr Compiler::fgMorphTree(GenTreePtr tree, MorphAddrContext* mac)
                     /* newTree is non-Null if we propagated an assertion */
                     newTree = optAssertionProp(apFull, tree, nullptr);
                 }
-                noway_assert(tree != nullptr);
+                assert(tree != nullptr);
             }
         }
         PREFAST_ASSUME(tree != nullptr);
@@ -15781,7 +15827,7 @@ void Compiler::fgMorphStmts(BasicBlock* block, bool* mult, bool* lnot, bool* loa
     GenTreePtr   prev = nullptr;
     for (; stmt != nullptr; prev = stmt->gtStmtExpr, stmt = stmt->gtNextStmt)
     {
-        noway_assert(stmt->gtOper == GT_STMT);
+        assert(stmt->gtOper == GT_STMT);
 
         if (fgRemoveRestOfBlock)
         {
@@ -16110,7 +16156,7 @@ void Compiler::fgMorphBlocks()
         {
             for (tree = block->bbTreeList; tree; tree = tree->gtNext)
             {
-                noway_assert(tree->gtOper == GT_STMT);
+                assert(tree->gtOper == GT_STMT);
                 GenTreePtr last = tree->gtStmt.gtStmtExpr;
 
                 if (last->gtOper == GT_ASG_ADD || last->gtOper == GT_ASG_SUB)
