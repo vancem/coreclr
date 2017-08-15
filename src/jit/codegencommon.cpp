@@ -1099,7 +1099,8 @@ void Compiler::compChangeLife(VARSET_VALARG_TP newLife DEBUGARG(GenTreePtr tree)
     // Handle the dying vars first, then the newly live vars.
     // This is because, in the RyuJIT backend case, they may occupy registers that
     // will be occupied by another var that is newly live.
-    VARSET_ITER_INIT(this, deadIter, deadSet, deadVarIndex);
+    VarSetOps::Iter deadIter(this, deadSet);
+    unsigned        deadVarIndex = 0;
     while (deadIter.NextElem(&deadVarIndex))
     {
         unsigned varNum = lvaTrackedToVarNum[deadVarIndex];
@@ -1134,7 +1135,8 @@ void Compiler::compChangeLife(VARSET_VALARG_TP newLife DEBUGARG(GenTreePtr tree)
 #endif // !LEGACY_BACKEND
     }
 
-    VARSET_ITER_INIT(this, bornIter, bornSet, bornVarIndex);
+    VarSetOps::Iter bornIter(this, bornSet);
+    unsigned        bornVarIndex = 0;
     while (bornIter.NextElem(&bornVarIndex))
     {
         unsigned varNum = lvaTrackedToVarNum[bornVarIndex];
@@ -1304,7 +1306,8 @@ regMaskTP CodeGenInterface::genLiveMask(VARSET_VALARG_TP liveSet)
 
     regMaskTP liveMask = 0;
 
-    VARSET_ITER_INIT(compiler, iter, liveSet, varIndex);
+    VarSetOps::Iter iter(compiler, liveSet);
+    unsigned        varIndex = 0;
     while (iter.NextElem(&varIndex))
     {
 
@@ -1584,7 +1587,11 @@ BasicBlock* CodeGen::genCreateTempLabel()
     block->bbFlags |= (compiler->compCurBB->bbFlags & BBF_COLD);
 
 #ifdef DEBUG
+#ifdef UNIX_X86_ABI
+    block->bbTgtStkDepth = (genStackLevel - curNestedAlignment) / sizeof(int);
+#else
     block->bbTgtStkDepth = genStackLevel / sizeof(int);
+#endif
 #endif
     return block;
 }
@@ -2381,6 +2388,17 @@ FOUND_AM:
         }
 
         /* Special case: constant array index (that is range-checked) */
+        CLANG_FORMAT_COMMENT_ANCHOR;
+
+#if defined(LEGACY_BACKEND)
+        // If we've already placed rv2 in a register, we are probably being called in a context that has already
+        // presumed that an addressing mode will be created, even if rv2 is constant, and if we fold we may not find a
+        // useful addressing mode (e.g. if we had [mul * rv2 + cns] it might happen to fold to [cns2].
+        if (mode == -1 && rv2->InReg())
+        {
+            fold = false;
+        }
+#endif
 
         if (fold)
         {
@@ -5519,16 +5537,13 @@ void CodeGen::genCheckUseBlockInit()
             continue;
         }
 
-#if CAN_DISABLE_DFA
         /* If we don't know lifetimes of variables, must be conservative */
-
-        if (compiler->opts.MinOpts())
+        if (!compiler->backendRequiresLocalVarLifetimes())
         {
             varDsc->lvMustInit = true;
             noway_assert(!varDsc->lvRegister);
         }
         else
-#endif // CAN_DISABLE_DFA
         {
             if (!varDsc->lvTracked)
             {

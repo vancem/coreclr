@@ -624,11 +624,6 @@ namespace System.Threading.Tasks
 
             try
             {
-                if (AppContextSwitches.ThrowExceptionIfDisposedCancellationTokenSource)
-                {
-                    cancellationToken.ThrowIfSourceDisposed();
-                }
-
                 // If an unstarted task has a valid CancellationToken that gets signalled while the task is still not queued
                 // we need to proactively cancel it, because it may never execute to transition itself. 
                 // The only way to accomplish this is to register a callback on the CT.
@@ -2832,11 +2827,16 @@ namespace System.Threading.Tasks
         }
 
         /// <summary>
-        /// The core wait function, which is only accesible internally. It's meant to be used in places in TPL code where 
+        /// The core wait function, which is only accessible internally. It's meant to be used in places in TPL code where 
         /// the current context is known or cached.
         /// </summary>
         [MethodImpl(MethodImplOptions.NoOptimization)]  // this is needed for the parallel debugger
-        internal bool InternalWait(int millisecondsTimeout, CancellationToken cancellationToken)
+        internal bool InternalWait(int millisecondsTimeout, CancellationToken cancellationToken) =>
+            InternalWaitCore(millisecondsTimeout, cancellationToken);
+
+        // Separated out to allow it to be optimized (caller is marked NoOptimization for VS parallel debugger
+        // to be able to see the method on the stack and inspect arguments).
+        private bool InternalWaitCore(int millisecondsTimeout, CancellationToken cancellationToken)
         {
             // ETW event for Task Wait Begin
             var etwLog = TplEtwProvider.Log;
@@ -4463,7 +4463,7 @@ namespace System.Threading.Tasks
 #if DEBUG
             bool waitResult =
 #endif
-            WaitAll(tasks, Timeout.Infinite);
+            WaitAllCore(tasks, Timeout.Infinite, default(CancellationToken));
 
 #if DEBUG
             Debug.Assert(waitResult, "expected wait to succeed");
@@ -4508,7 +4508,7 @@ namespace System.Threading.Tasks
                 ThrowHelper.ThrowArgumentOutOfRangeException(ExceptionArgument.timeout);
             }
 
-            return WaitAll(tasks, (int)totalMilliseconds);
+            return WaitAllCore(tasks, (int)totalMilliseconds, default(CancellationToken));
         }
 
         /// <summary>
@@ -4540,7 +4540,7 @@ namespace System.Threading.Tasks
         [MethodImpl(MethodImplOptions.NoOptimization)]  // this is needed for the parallel debugger
         public static bool WaitAll(Task[] tasks, int millisecondsTimeout)
         {
-            return WaitAll(tasks, millisecondsTimeout, default(CancellationToken));
+            return WaitAllCore(tasks, millisecondsTimeout, default(CancellationToken));
         }
 
         /// <summary>
@@ -4572,7 +4572,7 @@ namespace System.Threading.Tasks
         [MethodImpl(MethodImplOptions.NoOptimization)]  // this is needed for the parallel debugger
         public static void WaitAll(Task[] tasks, CancellationToken cancellationToken)
         {
-            WaitAll(tasks, Timeout.Infinite, cancellationToken);
+            WaitAllCore(tasks, Timeout.Infinite, cancellationToken);
         }
 
         /// <summary>
@@ -4610,7 +4610,12 @@ namespace System.Threading.Tasks
         /// The <paramref name="cancellationToken"/> was canceled.
         /// </exception>
         [MethodImpl(MethodImplOptions.NoOptimization)]  // this is needed for the parallel debugger
-        public static bool WaitAll(Task[] tasks, int millisecondsTimeout, CancellationToken cancellationToken)
+        public static bool WaitAll(Task[] tasks, int millisecondsTimeout, CancellationToken cancellationToken) =>
+            WaitAllCore(tasks, millisecondsTimeout, cancellationToken);
+
+        // Separated out to allow it to be optimized (caller is marked NoOptimization for VS parallel debugger
+        // to be able to see the method on the stack and inspect arguments).
+        private static bool WaitAllCore(Task[] tasks, int millisecondsTimeout, CancellationToken cancellationToken)
         {
             if (tasks == null)
             {
@@ -4852,7 +4857,7 @@ namespace System.Threading.Tasks
         [MethodImpl(MethodImplOptions.NoOptimization)]  // this is needed for the parallel debugger
         public static int WaitAny(params Task[] tasks)
         {
-            int waitResult = WaitAny(tasks, Timeout.Infinite);
+            int waitResult = WaitAnyCore(tasks, Timeout.Infinite, default(CancellationToken));
             Debug.Assert(tasks.Length == 0 || waitResult != -1, "expected wait to succeed");
             return waitResult;
         }
@@ -4891,7 +4896,7 @@ namespace System.Threading.Tasks
                 ThrowHelper.ThrowArgumentOutOfRangeException(ExceptionArgument.timeout);
             }
 
-            return WaitAny(tasks, (int)totalMilliseconds);
+            return WaitAnyCore(tasks, (int)totalMilliseconds, default(CancellationToken));
         }
 
         /// <summary>
@@ -4918,7 +4923,7 @@ namespace System.Threading.Tasks
         [MethodImpl(MethodImplOptions.NoOptimization)]  // this is needed for the parallel debugger
         public static int WaitAny(Task[] tasks, CancellationToken cancellationToken)
         {
-            return WaitAny(tasks, Timeout.Infinite, cancellationToken);
+            return WaitAnyCore(tasks, Timeout.Infinite, cancellationToken);
         }
 
         /// <summary>
@@ -4948,7 +4953,7 @@ namespace System.Threading.Tasks
         [MethodImpl(MethodImplOptions.NoOptimization)]  // this is needed for the parallel debugger
         public static int WaitAny(Task[] tasks, int millisecondsTimeout)
         {
-            return WaitAny(tasks, millisecondsTimeout, default(CancellationToken));
+            return WaitAnyCore(tasks, millisecondsTimeout, default(CancellationToken));
         }
 
         /// <summary>
@@ -4982,7 +4987,12 @@ namespace System.Threading.Tasks
         /// The <paramref name="cancellationToken"/> was canceled.
         /// </exception>
         [MethodImpl(MethodImplOptions.NoOptimization)]  // this is needed for the parallel debugger
-        public static int WaitAny(Task[] tasks, int millisecondsTimeout, CancellationToken cancellationToken)
+        public static int WaitAny(Task[] tasks, int millisecondsTimeout, CancellationToken cancellationToken) =>
+            WaitAnyCore(tasks, millisecondsTimeout, cancellationToken);
+
+        // Separated out to allow it to be optimized (caller is marked NoOptimization for VS parallel debugger
+        // to be able to inspect arguments).
+        private static int WaitAnyCore(Task[] tasks, int millisecondsTimeout, CancellationToken cancellationToken)
         {
             if (tasks == null)
             {
@@ -5238,11 +5248,6 @@ namespace System.Threading.Tasks
             if (function == null) ThrowHelper.ThrowArgumentNullException(ExceptionArgument.function);
             Contract.EndContractBlock();
 
-            if (AppContextSwitches.ThrowExceptionIfDisposedCancellationTokenSource)
-            {
-                cancellationToken.ThrowIfSourceDisposed();
-            }
-
             // Short-circuit if we are given a pre-canceled token
             if (cancellationToken.IsCancellationRequested)
                 return Task.FromCanceled(cancellationToken);
@@ -5288,11 +5293,6 @@ namespace System.Threading.Tasks
             // Check arguments
             if (function == null) ThrowHelper.ThrowArgumentNullException(ExceptionArgument.function);
             Contract.EndContractBlock();
-
-            if (AppContextSwitches.ThrowExceptionIfDisposedCancellationTokenSource)
-            {
-                cancellationToken.ThrowIfSourceDisposed();
-            }
 
             // Short-circuit if we are given a pre-canceled token
             if (cancellationToken.IsCancellationRequested)

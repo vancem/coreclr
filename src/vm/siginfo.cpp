@@ -18,7 +18,6 @@
 #include "field.h"
 #include "eeconfig.h"
 #include "runtimehandles.h" // for SignatureNative
-#include "security.h" // for CanSkipVerification
 #include "winwrap.h"
 #include <formattype.h>
 #include "sigbuilder.h"
@@ -1200,8 +1199,6 @@ TypeHandle SigPointer::GetTypeHandleThrowing(
             PREFIX_ASSUME(pZapSigContext != NULL);
             pModule = pZapSigContext->GetZapSigModule()->GetModuleFromIndex(ix);
 
-            // For ReadyToRunCompilation we return a null TypeHandle when we reference a non-local module
-            //
             if ((pModule != NULL) && pModule->IsInCurrentVersionBubble())
             {
                 thRet = psig.GetTypeHandleThrowing(pModule, 
@@ -1211,6 +1208,12 @@ TypeHandle SigPointer::GetTypeHandleThrowing(
                                                    dropGenericArgumentLevel,
                                                    pSubst, 
                                                    pZapSigContext);
+            }
+            else
+            {
+                // For ReadyToRunCompilation we return a null TypeHandle when we reference a non-local module
+                //
+                thRet = TypeHandle();
             }
 #else
             DacNotImpl();
@@ -1466,11 +1469,7 @@ TypeHandle SigPointer::GetTypeHandleThrowing(
                
                 if (IsNilToken(typeToken))
                 {
-                    SString * fullTypeName = pOrigModule->IBCErrorNameString();
-                    fullTypeName->Clear();
-                    pOrigModule->LookupIbcTypeToken(pModule, ibcToken, fullTypeName);
-
-                    THROW_BAD_FORMAT(BFA_MISSING_IBC_EXTERNAL_TYPE, pOrigModule);
+                    COMPlusThrow(kTypeLoadException, IDS_IBC_MISSING_EXTERNAL_TYPE);
                 }
             }
 #endif
@@ -1531,12 +1530,11 @@ TypeHandle SigPointer::GetTypeHandleThrowing(
                 
                     if (typFromSigIsClass != typLoadedIsClass)
                     {
-                        if((pModule->GetMDImport()->GetMetadataStreamVersion() != MD_STREAM_VER_1X)
-                            || !Security::CanSkipVerification(pModule->GetDomainAssembly()))
+                        if (pModule->GetMDImport()->GetMetadataStreamVersion() != MD_STREAM_VER_1X)
                         {
-                                pOrigModule->GetAssembly()->ThrowTypeLoadException(pModule->GetMDImport(),
-                                                                                   typeToken, 
-                                                                                   BFA_CLASSLOAD_VALUETYPEMISMATCH);
+                            pOrigModule->GetAssembly()->ThrowTypeLoadException(pModule->GetMDImport(),
+                                                                                typeToken, 
+                                                                                BFA_CLASSLOAD_VALUETYPEMISMATCH);
                         }
                     }
                 }
@@ -1772,11 +1770,7 @@ TypeHandle SigPointer::GetGenericInstType(Module *        pModule,
 
             if (IsNilToken(typeToken))
             {
-                SString * fullTypeName = pOrigModule->IBCErrorNameString();
-                fullTypeName->Clear();
-                pOrigModule->LookupIbcTypeToken(pModule, ibcToken, fullTypeName);
-
-                THROW_BAD_FORMAT(BFA_MISSING_IBC_EXTERNAL_TYPE, pOrigModule);
+                COMPlusThrow(kTypeLoadException, IDS_IBC_MISSING_EXTERNAL_TYPE);
             }
         }
 #endif

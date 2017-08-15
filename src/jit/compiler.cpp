@@ -1003,9 +1003,14 @@ var_types Compiler::getReturnTypeForStruct(CORINFO_CLASS_HANDLE clsHnd,
     //
     if (structSize <= sizeof(double))
     {
-        // We set the "primitive" useType based upon the structSize
-        // and also examine the clsHnd to see if it is an HFA of count one
-        useType = getPrimitiveTypeForStruct(structSize, clsHnd);
+#if defined LEGACY_BACKEND
+        if (!IsHfa(clsHnd))
+#endif
+        {
+            // We set the "primitive" useType based upon the structSize
+            // and also examine the clsHnd to see if it is an HFA of count one
+            useType = getPrimitiveTypeForStruct(structSize, clsHnd);
+        }
     }
 
 #endif // FEATURE_UNIX_AMD64_STRUCT_PASSING
@@ -1043,8 +1048,10 @@ var_types Compiler::getReturnTypeForStruct(CORINFO_CLASS_HANDLE clsHnd,
             // Structs that are HFA's are returned in multiple registers
             if (IsHfa(clsHnd))
             {
+#if !defined(LEGACY_BACKEND)
                 // HFA's of count one should have been handled by getPrimitiveTypeForStruct
                 assert(GetHfaCount(clsHnd) >= 2);
+#endif // !defined(LEGACY_BACKEND)
 
                 // setup wbPassType and useType indicate that this is returned by value as an HFA
                 //  using multiple registers
@@ -1895,7 +1902,9 @@ void Compiler::compInit(ArenaAllocator* pAlloc, InlineInfo* inlineInfo)
 #endif // DEBUG
 #endif // MEASURE_MEM_ALLOC
 
+#ifdef LEGACY_BACKEND
         compQMarks = nullptr;
+#endif
     }
     else
     {
@@ -1911,7 +1920,9 @@ void Compiler::compInit(ArenaAllocator* pAlloc, InlineInfo* inlineInfo)
 #endif // DEBUG
 #endif // MEASURE_MEM_ALLOC
 
+#ifdef LEGACY_BACKEND
         compQMarks = new (this, CMK_Unknown) ExpandArrayStack<GenTreePtr>(getAllocator());
+#endif
     }
 
 #ifdef FEATURE_TRACELOGGING
@@ -3650,14 +3661,6 @@ void Compiler::compInitOptions(JitFlags* jitFlags)
 
 #ifdef DEBUG
 
-void JitDump(const char* pcFormat, ...)
-{
-    va_list lst;
-    va_start(lst, pcFormat);
-    vflogf(jitstdout, pcFormat, lst);
-    va_end(lst);
-}
-
 bool Compiler::compJitHaltMethod()
 {
     /* This method returns true when we use an INS_BREAKPOINT to allow us to step into the generated native code */
@@ -4815,8 +4818,8 @@ void Compiler::compCompile(void** methodCodePtr, ULONG* methodCodeSize, JitFlags
     m_pLinearScan = getLinearScanAllocator(this);
 
     /* Lower */
-    Lowering lower(this, m_pLinearScan); // PHASE_LOWERING
-    lower.Run();
+    m_pLowering = new (this, CMK_LSRA) Lowering(this, m_pLinearScan); // PHASE_LOWERING
+    m_pLowering->Run();
 
     assert(lvaSortAgain == false); // We should have re-run fgLocalVarLiveness() in lower.Run()
     lvaTrackedFixed = true;        // We can not add any new tracked variables after this point.
@@ -4866,6 +4869,7 @@ void Compiler::compCompile(void** methodCodePtr, ULONG* methodCodeSize, JitFlags
 #endif // defined(DEBUG)
 
     compFunctionTraceEnd(*methodCodePtr, *methodCodeSize, false);
+    JITDUMP("Method code size: %d\n", (unsigned)(*methodCodeSize));
 
 #if FUNC_INFO_LOGGING
     if (compJitFuncInfoFile != nullptr)
@@ -8297,7 +8301,8 @@ void dumpConvertedVarSet(Compiler* comp, VARSET_VALARG_TP vars)
     pVarNumSet            = (BYTE*)_alloca(varNumSetBytes);
     memset(pVarNumSet, 0, varNumSetBytes); // empty the set
 
-    VARSET_ITER_INIT(comp, iter, vars, varIndex);
+    VarSetOps::Iter iter(comp, vars);
+    unsigned        varIndex = 0;
     while (iter.NextElem(&varIndex))
     {
         unsigned varNum = comp->lvaTrackedToVarNum[varIndex];
@@ -9193,10 +9198,6 @@ int cTreeFlagsIR(Compiler* comp, GenTree* tree)
                 if (tree->gtFlags & GTF_VAR_USEASG)
                 {
                     chars += printf("[VAR_USEASG]");
-                }
-                if (tree->gtFlags & GTF_VAR_USEDEF)
-                {
-                    chars += printf("[VAR_USEDEF]");
                 }
                 if (tree->gtFlags & GTF_VAR_CAST)
                 {

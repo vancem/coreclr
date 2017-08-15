@@ -90,9 +90,8 @@ void Compiler::fgInit()
     genReturnBB = nullptr;
 
     /* We haven't reached the global morphing phase */
-    fgGlobalMorph  = false;
-    fgExpandInline = false;
-    fgModified     = false;
+    fgGlobalMorph = false;
+    fgModified    = false;
 
 #ifdef DEBUG
     fgSafeBasicBlockCreation = true;
@@ -1939,7 +1938,8 @@ void Compiler::fgComputeEnterBlocksSet()
     if (verbose)
     {
         printf("Enter blocks: ");
-        BLOCKSET_ITER_INIT(this, iter, fgEnterBlks, bbNum);
+        BlockSetOps::Iter iter(this, fgEnterBlks);
+        unsigned          bbNum = 0;
         while (iter.NextElem(&bbNum))
         {
             printf("BB%02u ", bbNum);
@@ -2289,7 +2289,8 @@ BlockSet_ValRet_T Compiler::fgDomFindStartNodes()
     if (verbose)
     {
         printf("\nDominator computation start blocks (those blocks with no incoming edges):\n");
-        BLOCKSET_ITER_INIT(this, iter, startNodes, bbNum);
+        BlockSetOps::Iter iter(this, startNodes);
+        unsigned          bbNum = 0;
         while (iter.NextElem(&bbNum))
         {
             printf("BB%02u ", bbNum);
@@ -3297,7 +3298,7 @@ Compiler::SwitchUniqueSuccSet Compiler::GetDescriptorForSwitch(BasicBlock* switc
         // reachability information stored in the blocks. To avoid that, we just use a local BitVec.
 
         BitVecTraits blockVecTraits(fgBBNumMax + 1, this);
-        BitVec       BITVEC_INIT_NOCOPY(uniqueSuccBlocks, BitVecOps::MakeEmpty(&blockVecTraits));
+        BitVec       uniqueSuccBlocks(BitVecOps::MakeEmpty(&blockVecTraits));
         BasicBlock** jumpTable = switchBlk->bbJumpSwt->bbsDstTab;
         unsigned     jumpCount = switchBlk->bbJumpSwt->bbsCount;
         for (unsigned i = 0; i < jumpCount; i++)
@@ -3538,6 +3539,7 @@ void Compiler::fgInitBlockVarSets()
         block->InitVarSets(this);
     }
 
+#ifdef LEGACY_BACKEND
     // QMarks are much like blocks, and need their VarSets initialized.
     assert(!compIsForInlining());
     for (unsigned i = 0; i < compQMarks->Size(); i++)
@@ -3551,6 +3553,7 @@ void Compiler::fgInitBlockVarSets()
             VarSetOps::AssignAllowUninitRhs(this, qmark->gtQmark.gtElseLiveSet, VarSetOps::UninitVal());
         }
     }
+#endif // LEGACY_BACKEND
     fgBBVarSetsInited = true;
 }
 
@@ -12832,6 +12835,10 @@ void Compiler::fgComputeEdgeWeights()
         if (fgFirstBBisScratch())
         {
             fgFirstBB->setBBProfileWeight(fgCalledCount);
+            if (fgFirstBB->bbWeight == 0)
+            {
+                fgFirstBB->bbFlags |= BBF_RUN_RARELY;
+            }
         }
 
 #if DEBUG
@@ -18714,15 +18721,14 @@ void Compiler::fgOrderBlockOps(GenTreePtr  tree,
         assert(srcPtrOrVal->OperIsIndir());
         srcPtrOrVal = srcPtrOrVal->AsIndir()->Addr();
     }
-    GenTreePtr sizeNode = (destBlk->gtOper == GT_DYN_BLK) ? destBlk->AsDynBlk()->gtDynamicSize : nullptr;
-    noway_assert((sizeNode != nullptr) || ((destBlk->gtFlags & GTF_REVERSE_OPS) == 0));
+
     assert(destAddr != nullptr);
     assert(srcPtrOrVal != nullptr);
 
     GenTreePtr ops[3] = {
         destAddr,    // Dest address
         srcPtrOrVal, // Val / Src address
-        sizeNode     // Size of block
+        nullptr      // Size of block
     };
 
     regMaskTP regs[3] = {reg0, reg1, reg2};
@@ -18737,7 +18743,16 @@ void Compiler::fgOrderBlockOps(GenTreePtr  tree,
             {2, 1, 0}  //          true            |       GTF_REVERSE_OPS
         };
 
-    int orderNum = ((destBlk->gtFlags & GTF_REVERSE_OPS) != 0) * 1 + ((tree->gtFlags & GTF_REVERSE_OPS) != 0) * 2;
+    int orderNum = ((tree->gtFlags & GTF_REVERSE_OPS) == 0) ? 0 : 2;
+    if (destBlk->OperIs(GT_DYN_BLK))
+    {
+        GenTreeDynBlk* const dynBlk = destBlk->AsDynBlk();
+        if (dynBlk->gtEvalSizeFirst)
+        {
+            orderNum++;
+        }
+        ops[2] = dynBlk->gtDynamicSize;
+    }
 
     assert(orderNum < 4);
 
@@ -19599,7 +19614,8 @@ void Compiler::fgDispReach()
     for (BasicBlock* block = fgFirstBB; block != nullptr; block = block->bbNext)
     {
         printf("BB%02u : ", block->bbNum);
-        BLOCKSET_ITER_INIT(this, iter, block->bbReach, bbNum);
+        BlockSetOps::Iter iter(this, block->bbReach);
+        unsigned          bbNum = 0;
         while (iter.NextElem(&bbNum))
         {
             printf("BB%02u ", bbNum);
@@ -20095,11 +20111,11 @@ void Compiler::fgDispBasicBlocks(bool dumpTrees)
 /*****************************************************************************/
 //  Increment the stmtNum and dump the tree using gtDispTree
 //
-void Compiler::fgDumpStmtTree(GenTreePtr stmt, unsigned blkNum)
+void Compiler::fgDumpStmtTree(GenTreePtr stmt, unsigned bbNum)
 {
     compCurStmtNum++; // Increment the current stmtNum
 
-    printf("\n***** BB%02u, stmt %d\n", blkNum, compCurStmtNum);
+    printf("\n***** BB%02u, stmt %d\n", bbNum, compCurStmtNum);
 
     if (fgOrder == FGOrderLinear || opts.compDbgInfo)
     {
@@ -21252,7 +21268,7 @@ void Compiler::fgDebugCheckBlockLinks()
                 // Create a set with all the successors. Don't use BlockSet, so we don't need to worry
                 // about the BlockSet epoch.
                 BitVecTraits bitVecTraits(fgBBNumMax + 1, this);
-                BitVec       BITVEC_INIT_NOCOPY(succBlocks, BitVecOps::MakeEmpty(&bitVecTraits));
+                BitVec       succBlocks(BitVecOps::MakeEmpty(&bitVecTraits));
                 BasicBlock** jumpTable = block->bbJumpSwt->bbsDstTab;
                 unsigned     jumpCount = block->bbJumpSwt->bbsCount;
                 for (unsigned i = 0; i < jumpCount; i++)
@@ -21791,9 +21807,10 @@ Compiler::fgWalkResult Compiler::fgUpdateInlineReturnExpressionPlaceHolder(GenTr
                 }
 #endif // DEBUG
 
-                CORINFO_CALL_INFO x = {};
-                x.hMethod           = call->gtCallMethHnd;
-                comp->impDevirtualizeCall(call, tree, &x, nullptr);
+                CORINFO_METHOD_HANDLE  method      = call->gtCallMethHnd;
+                unsigned               methodFlags = 0;
+                CORINFO_CONTEXT_HANDLE context     = nullptr;
+                comp->impDevirtualizeCall(call, tree, &method, &methodFlags, &context, nullptr);
             }
         }
     }
@@ -22657,6 +22674,12 @@ GenTreePtr Compiler::fgInlinePrependStatements(InlineInfo* inlineInfo)
                         gtDispTree(afterStmt);
                     }
 #endif // DEBUG
+                }
+                else if (argNode->IsBoxedValue())
+                {
+                    // Try to clean up any unnecessary boxing side effects
+                    // since the box itself will be ignored.
+                    gtTryRemoveBoxUpstreamEffects(argNode);
                 }
             }
         }
@@ -24387,13 +24410,49 @@ void Compiler::fgUpdateFinallyTargetFlags()
 
     JITDUMP("In fgUpdateFinallyTargetFlags, updating finally target flag bits\n");
 
+    fgClearAllFinallyTargetBits();
+    fgAddFinallyTargetFlags();
+
+#endif // FEATURE_EH_FUNCLETS && defined(_TARGET_ARM_)
+}
+
+//------------------------------------------------------------------------
+// fgClearAllFinallyTargetBits: Clear all BBF_FINALLY_TARGET bits; these will need to be
+// recomputed later.
+//
+void Compiler::fgClearAllFinallyTargetBits()
+{
+#if FEATURE_EH_FUNCLETS && defined(_TARGET_ARM_)
+
+    JITDUMP("*************** In fgClearAllFinallyTargetBits()\n");
+
+    // Note that we clear the flags even if there are no EH clauses (compHndBBtabCount == 0)
+    // in case bits are left over from EH clauses being deleted.
+
     // Walk all blocks, and reset the target bits.
     for (BasicBlock* block = fgFirstBB; block != nullptr; block = block->bbNext)
     {
         block->bbFlags &= ~BBF_FINALLY_TARGET;
     }
 
-    // Walk all blocks again, and set the target bits.
+#endif // FEATURE_EH_FUNCLETS && defined(_TARGET_ARM_)
+}
+
+//------------------------------------------------------------------------
+// fgAddFinallyTargetFlags: Add BBF_FINALLY_TARGET bits to all finally targets.
+//
+void Compiler::fgAddFinallyTargetFlags()
+{
+#if FEATURE_EH_FUNCLETS && defined(_TARGET_ARM_)
+
+    JITDUMP("*************** In fgAddFinallyTargetFlags()\n");
+
+    if (compHndBBtabCount == 0)
+    {
+        JITDUMP("No EH in this method, no flags to set.\n");
+        return;
+    }
+
     for (BasicBlock* block = fgFirstBB; block != nullptr; block = block->bbNext)
     {
         if (block->isBBCallAlwaysPair())
@@ -24947,7 +25006,7 @@ private:
         {
             GenTreePtr fptrAddressCopy = compiler->gtCloneExpr(fptrAddress);
             GenTreePtr fatPointerMask  = new (compiler, GT_CNS_INT) GenTreeIntCon(TYP_I_IMPL, FAT_POINTER_MASK);
-            return compiler->gtNewOperNode(GT_XOR, pointerType, fptrAddressCopy, fatPointerMask);
+            return compiler->gtNewOperNode(GT_SUB, pointerType, fptrAddressCopy, fatPointerMask);
         }
 
         //------------------------------------------------------------------------

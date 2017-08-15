@@ -34,18 +34,49 @@ import csv
 
 # List of dlls we want to exclude
 dll_exclude_list = {
-    'Windows_NT': [
+    'All': [
         # Require Newtonsoft.Json
         "Microsoft.DotNet.ProjectModel.dll",
         "Microsoft.Extensions.DependencyModel.dll",
         # Require System.Security.Principal.Windows
         "System.Net.Requests.dll",
         "System.Net.Security.dll",
-        "System.Net.Sockets.dll"
+        "System.Net.Sockets.dll",
+        # Moving target. Not a reliable measurement
+        "System.Private.CoreLib.dll",
+        # Reference and forwarding assemblies
+        "System.AppContext.dll",
+        "System.Diagnostics.Contracts.dll",
+        "System.Dynamic.Runtime.dll",
+        "System.Globalization.dll",
+        "System.Globalization.Calendars.dll",
+        "System.IO.dll",
+        "System.IO.FileSystem.Primitives.dll",
+        "System.Reflection.dll",
+        "System.Reflection.Emit.dll",
+        "System.Reflection.Emit.ILGeneration.dll",
+        "System.Reflection.Emit.Lightweight.dll",
+        "System.Reflection.Extensions.dll",
+        "System.Reflection.Primitives.dll",
+        "System.Resources.ResourceManager.dll",
+        "System.Runtime.Handles.dll",
+        "System.Runtime.Loader.dll",
+        "System.Runtime.Serialization.Json.dll",
+        "System.Runtime.Serialization.Xml.dll",
+        "System.Security.Principal.dll",
+        "System.Text.Encoding.dll",
+        "System.Text.Encoding.Extensions.dll",
+        "System.Threading.ThreadPool.dll",
+        "System.Threading.Timer.dll",
+        "System.Xml.ReaderWriter.dll",
+        "System.Xml.XDocument.dll",
+        "System.Xml.XmlDocument.dll",
+        "System.Xml.XmlSerializer.dll",
+        "System.Xml.XPath.dll"
+    ],
+    'Windows_NT': [
     ],
     'Linux' : [
-        # Required System.Runtime.WindowsRuntime
-        "System.Runtime.WindowsRuntime.UI.Xaml.dll"
     ]
 }
 
@@ -84,6 +115,8 @@ parser.add_argument('-os', dest='operating_system', default='Windows_NT')
 parser.add_argument('-clr_root', dest='clr_root', default=None)
 parser.add_argument('-assembly_root', dest='assembly_root', default=None)
 parser.add_argument('-benchview_path', dest='benchview_path', default=None)
+parser.add_argument('-iterations', dest='iterations', default=5, type=int)
+parser.add_argument('-opt_level', dest='opt_level', default='full_opt')
 
 ##########################################################################
 # Helper Functions
@@ -108,6 +141,8 @@ def validate_args(args):
     clr_root = args.clr_root
     assembly_root = args.assembly_root
     benchview_path = args.benchview_path
+    iterations = args.iterations
+    opt_level = args.opt_level.lower()
 
     def validate_arg(arg, check):
         """ Validate an individual arg
@@ -129,6 +164,7 @@ def validate_args(args):
     valid_build_types = ['Release']
     valid_run_types = ['rolling', 'private']
     valid_os = ['Windows_NT', 'Ubuntu14.04']
+    valid_opt_levels = ['full_opt', 'min_opt']
 
     arch = next((a for a in valid_archs if a.lower() == arch.lower()), arch)
     build_type = next((b for b in valid_build_types if b.lower() == build_type.lower()), build_type)
@@ -140,6 +176,8 @@ def validate_args(args):
     validate_arg(arch, lambda item: item in valid_archs[os_group])
     validate_arg(build_type, lambda item: item in valid_build_types)
     validate_arg(run_type, lambda item: item in valid_run_types)
+    validate_arg(iterations, lambda item: item > 0)
+    validate_arg(opt_level, lambda item: item in valid_opt_levels)
 
     if clr_root is None:
         raise Exception('--clr_root must be set')
@@ -157,7 +195,7 @@ def validate_args(args):
         benchview_path = os.path.normpath(benchview_path)
         validate_arg(benchview_path, lambda item: os.path.isdir(benchview_path))
 
-    args = (arch, operating_system, os_group, build_type, run_type, clr_root, assembly_root, benchview_path)
+    args = (arch, operating_system, os_group, build_type, run_type, clr_root, assembly_root, benchview_path, iterations, opt_level)
 
     # Log configuration
     log('Configuration:')
@@ -165,7 +203,9 @@ def validate_args(args):
     log(' os: %s' % operating_system)
     log(' os_group: %s' % os_group)
     log(' build_type: %s' % build_type)
+    log(' opt_level: %s' % opt_level)
     log(' run_type: %s' % run_type)
+    log(' iterations: %d' % iterations)
     log(' clr_root: %s' % clr_root)
     log(' assembly_root: %s' % assembly_root)
     if not benchview_path is None:
@@ -221,7 +261,7 @@ def generateCSV(dll_name, dll_runtimes):
 
     return csv_file_name
 
-def runIterations(dll_name, dll_path, iterations, crossgen_path, jit_path, assemblies_path):
+def runIterations(dll_name, dll_path, iterations, crossgen_path, jit_path, assemblies_path, opt_level):
     """ Run throughput testing for a given dll
     Args:
         dll_name: the name of the dll
@@ -245,13 +285,18 @@ def runIterations(dll_name, dll_path, iterations, crossgen_path, jit_path, assem
             dll_path
             ]
 
+    my_env = os.environ
+
+    if opt_level == 'min_opt':
+        my_env['COMPlus_JITMinOpts'] = '1'
+
     log(" ".join(run_args))
 
     # Time.clock() returns seconds, with a resolution of 0.4 microseconds, so multiply by the multiplier to get milliseconds
     multiplier = 1000
 
-    for iteration in range(0,iterations):
-        proc = subprocess.Popen(run_args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    for iteration in range(0,iterations + 1):
+        proc = subprocess.Popen(run_args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=my_env)
 
         start_time = timeit.default_timer()
         (out, err) = proc.communicate()
@@ -277,7 +322,7 @@ def main(args):
     global os_group_list
     global python_exe_list
 
-    architecture, operating_system, os_group, build_type, run_type, clr_root, assembly_root, benchview_path = validate_args(args)
+    architecture, operating_system, os_group, build_type, run_type, clr_root, assembly_root, benchview_path, iterations, opt_level = validate_args(args)
     arch = architecture
 
     current_dir = os.getcwd()
@@ -304,8 +349,6 @@ def main(args):
     # Replace assembly_root's System.Private.CoreLib with built System.Private.CoreLib.
     shutil.copyfile(os.path.join(bin_path, 'System.Private.CoreLib.dll'), os.path.join(assembly_root, 'System.Private.CoreLib.dll'))
 
-    iterations = 6
-
     python_exe = python_exe_list[os_group]
 
     # Run throughput testing
@@ -314,10 +357,11 @@ def main(args):
         if (dll_file_name.endswith(".dll") and
                 (not ".ni." in dll_file_name) and
                 ("Microsoft" in dll_file_name or "System" in dll_file_name) and
-                (not dll_file_name in dll_exclude_list[os_group])):
+                (not dll_file_name in dll_exclude_list[os_group]) and
+                (not dll_file_name in dll_exclude_list["All"])):
             dll_name = dll_file_name.replace(".dll", "")
             dll_path = os.path.join(assembly_root, dll_file_name)
-            dll_elapsed_times = runIterations(dll_file_name, dll_path, iterations, crossgen_path, jit_path, assembly_root)
+            dll_elapsed_times = runIterations(dll_file_name, dll_path, iterations, crossgen_path, jit_path, assembly_root, opt_level)
 
             if len(dll_elapsed_times) != 0:
                 if not benchview_path is None:
@@ -344,7 +388,7 @@ def main(args):
                 else:
                     # Write output to console if we are not publishing
                     log("%s" % (dll_name))
-                    log("Duration: [%s]" % (", ".join(str(x) for x in dll_elapsed_times)))
+                    log("Duration: [%s]" % (", ".join(str(x) for x in dll_elapsed_times[1:])))
 
     # Upload the data
     if not benchview_path is None:
@@ -370,6 +414,9 @@ def main(args):
                 "--config",
                 "OS",
                 operating_system,
+                "--config",
+                "OptLevel",
+                opt_level,
                 "--arch",
                 architecture,
                 "--machinepool",

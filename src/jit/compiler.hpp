@@ -3020,6 +3020,35 @@ inline unsigned Compiler::fgThrowHlpBlkStkLevel(BasicBlock* block)
 */
 inline void Compiler::fgConvertBBToThrowBB(BasicBlock* block)
 {
+    // If we're converting a BBJ_CALLFINALLY block to a BBJ_THROW block,
+    // then mark the subsequent BBJ_ALWAYS block as unreferenced.
+    if (block->isBBCallAlwaysPair())
+    {
+        BasicBlock* leaveBlk = block->bbNext;
+        noway_assert(leaveBlk->bbJumpKind == BBJ_ALWAYS);
+
+        leaveBlk->bbFlags &= ~BBF_DONT_REMOVE;
+        leaveBlk->bbRefs  = 0;
+        leaveBlk->bbPreds = nullptr;
+
+#if FEATURE_EH_FUNCLETS && defined(_TARGET_ARM_)
+        // This function (fgConvertBBToThrowBB) can be called before the predecessor lists are created (e.g., in
+        // fgMorph). The fgClearFinallyTargetBit() function to update the BBF_FINALLY_TARGET bit depends on these
+        // predecessor lists. If there are no predecessor lists, we immediately clear all BBF_FINALLY_TARGET bits
+        // (to allow subsequent dead code elimination to delete such blocks without asserts), and set a flag to
+        // recompute them later, before they are required.
+        if (fgComputePredsDone)
+        {
+            fgClearFinallyTargetBit(leaveBlk->bbJumpDest);
+        }
+        else
+        {
+            fgClearAllFinallyTargetBits();
+            fgNeedToAddFinallyTargetBits = true;
+        }
+#endif // FEATURE_EH_FUNCLETS && defined(_TARGET_ARM_)
+    }
+
     block->bbJumpKind = BBJ_THROW;
     block->bbSetRunRarely(); // any block with a throw is rare
 }
@@ -4688,10 +4717,8 @@ unsigned Compiler::GetSsaNumForLocalVarDef(GenTreePtr lcl)
         return SsaConfig::RESERVED_SSA_NUM;
     }
 
-    assert(lcl->gtFlags & (GTF_VAR_DEF | GTF_VAR_USEDEF));
     if (lcl->gtFlags & GTF_VAR_USEASG)
     {
-        assert((lcl->gtFlags & GTF_VAR_USEDEF) == 0);
         // It's an "lcl op= rhs" assignment.  "lcl" is both used and defined here;
         // we've chosen in this case to annotate "lcl" with the SSA number (and VN) of the use,
         // and to store the SSA number of the def in a side table.
@@ -4773,6 +4800,7 @@ void GenTree::VisitOperands(TVisitor visitor)
         case GT_RELOAD:
         case GT_ARR_LENGTH:
         case GT_CAST:
+        case GT_BITCAST:
         case GT_CKFINITE:
         case GT_LCLHEAP:
         case GT_ADDR:
@@ -4785,7 +4813,6 @@ void GenTree::VisitOperands(TVisitor visitor)
         case GT_JTRUE:
         case GT_SWITCH:
         case GT_NULLCHECK:
-        case GT_PHYSREGDST:
         case GT_PUTARG_REG:
         case GT_PUTARG_STK:
 #if defined(_TARGET_ARM_) && !defined(LEGACY_BACKEND)
@@ -5002,20 +5029,15 @@ void GenTree::VisitBinOpOperands(TVisitor visitor)
  *
  *  Note that compGetMem is an arena allocator that returns memory that is
  *  not zero-initialized and can contain data from a prior allocation lifetime.
- *  it also requires that 'sz' be aligned to a multiple of sizeof(int)
  */
 
 inline void* __cdecl operator new(size_t sz, Compiler* context, CompMemKind cmk)
 {
-    sz = AlignUp(sz, sizeof(int));
-    assert(sz != 0 && (sz & (sizeof(int) - 1)) == 0);
     return context->compGetMem(sz, cmk);
 }
 
 inline void* __cdecl operator new[](size_t sz, Compiler* context, CompMemKind cmk)
 {
-    sz = AlignUp(sz, sizeof(int));
-    assert(sz != 0 && (sz & (sizeof(int) - 1)) == 0);
     return context->compGetMem(sz, cmk);
 }
 

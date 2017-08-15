@@ -39,6 +39,7 @@ usage()
     echo "skiptests - skip the tests in the 'tests' subdirectory."
     echo "skipnuget - skip building nuget packages."
     echo "skiprestoreoptdata - skip restoring optimization data used by profile-based optimizations."
+    echo "skipcrossgen - skip native image generation"
     echo "verbose - optional argument to enable verbose build output."
     echo "-skiprestore: skip restoring packages ^(default: packages are restored during build^)."
 	echo "-disableoss: Disable Open Source Signing for System.Private.CoreLib."
@@ -59,14 +60,21 @@ usage()
 
 initHostDistroRid()
 {
+    __HostDistroRid=""
     if [ "$__HostOS" == "Linux" ]; then
-        if [ ! -e /etc/os-release ]; then
-            echo "WARNING: Can not determine runtime id for current distro."
-            __HostDistroRid=""
-        else
+        if [ -e /etc/os-release ]; then
             source /etc/os-release
             __HostDistroRid="$ID.$VERSION_ID-$__HostArch"
+        elif [ -e /etc/redhat-release ]; then
+            local redhatRelease=$(</etc/redhat-release)
+            if [[ $redhatRelease == "CentOS release 6."* || $redhatRelease == "Red Hat Enterprise Linux Server release 6."* ]]; then
+               __HostDistroRid="rhel.6-$__HostArch"
+            fi
         fi
+    fi
+
+    if [ "$__HostDistroRid" == "" ]; then
+        echo "WARNING: Can not determine runtime id for current distro."
     fi
 }
 
@@ -140,28 +148,31 @@ check_prereqs()
 
 restore_optdata()
 {
-    # if msbuild is not supported, then set __SkipRestoreOptData to 1
-    if [ $__isMSBuildOnNETCoreSupported == 0 ]; then __SkipRestoreOptData=1; fi
     # we only need optdata on a Release build
     if [[ "$__BuildType" != "Release" ]]; then __SkipRestoreOptData=1; fi
 
-    if [ $__SkipRestoreOptData == 0 ]; then
+    if [[ ( $__SkipRestoreOptData == 0 ) && ( $__isMSBuildOnNETCoreSupported == 1 ) ]]; then
         echo "Restoring the OptimizationData package"
         "$__ProjectRoot/run.sh" sync -optdata
         if [ $? != 0 ]; then
             echo "Failed to restore the optimization data package."
             exit 1
         fi
+    fi
 
+    if [ $__isMSBuildOnNETCoreSupported == 1 ]; then
         # Parse the optdata package versions out of msbuild so that we can pass them on to CMake
         local DotNetCli="$__ProjectRoot/Tools/dotnetcli/dotnet"
         if [ ! -f $DotNetCli ]; then
-            echo "Assertion failed: dotnet CLI not found at '$DotNetCli'"
-            exit 1
+            "$__ProjectRoot/init-tools.sh"
+            if [ $? != 0 ]; then
+                echo "Failed to restore buildtools."
+                exit 1
+            fi
         fi
         local OptDataProjectFilePath="$__ProjectRoot/src/.nuget/optdata/optdata.csproj"
-        __PgoOptDataVersion=$($DotNetCli msbuild $OptDataProjectFilePath /t:DumpPgoDataPackageVersion /nologo | sed 's/^\s*//')
-        __IbcOptDataVersion=$($DotNetCli msbuild $OptDataProjectFilePath /t:DumpIbcDataPackageVersion /nologo | sed 's/^\s*//')
+        __PgoOptDataVersion=$(DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 $DotNetCli msbuild $OptDataProjectFilePath /t:DumpPgoDataPackageVersion /nologo | sed 's/^\s*//')
+        __IbcOptDataVersion=$(DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 $DotNetCli msbuild $OptDataProjectFilePath /t:DumpIbcDataPackageVersion /nologo | sed 's/^\s*//')
     fi
 }
 
@@ -338,7 +349,7 @@ build_cross_arch_component()
     __SkipCrossArchBuild=1
     TARGET_ROOTFS=""
     # check supported cross-architecture components host(__HostArch)/target(__BuildArch) pair
-    if [[ "$__BuildArch" == "arm" && "$__CrossArch" == "x86" ]]; then
+    if [[ ("$__BuildArch" == "arm" || "$__BuildArch" == "armel") && "$__CrossArch" == "x86" ]]; then
         export CROSSCOMPILE=0
         __SkipCrossArchBuild=0
 
@@ -386,10 +397,11 @@ isMSBuildOnNETCoreSupported()
     if [ "$__HostArch" == "x64" ]; then
         if [ "$__HostOS" == "Linux" ]; then
             __isMSBuildOnNETCoreSupported=1
-            UNSUPPORTED_RIDS=("debian.9-x64" "ubuntu.17.04-x64")
+            # note: the RIDs below can use globbing patterns
+            UNSUPPORTED_RIDS=("debian.9-x64" "ubuntu.17.04-x64" "alpine.3.6.*-x64" "rhel.6-x64" "")
             for UNSUPPORTED_RID in "${UNSUPPORTED_RIDS[@]}"
             do
-                if [ "$__HostDistroRid" == "$UNSUPPORTED_RID" ]; then
+                if [[ $__HostDistroRid == $UNSUPPORTED_RID ]]; then
                     __isMSBuildOnNETCoreSupported=0
                     break
                 fi
@@ -403,8 +415,14 @@ isMSBuildOnNETCoreSupported()
 
 build_CoreLib_ni()
 {
+    if [ $__SkipCrossgen == 1 ]; then
+        echo "Skipping generating native image"
+        return
+    fi
+
     if [ $__SkipCoreCLR == 0 -a -e $__BinDir/crossgen ]; then
         echo "Generating native image for System.Private.CoreLib."
+        echo "$__BinDir/crossgen /Platform_Assemblies_Paths $__BinDir/IL $__IbcTuning /out $__BinDir/System.Private.CoreLib.dll $__BinDir/IL/System.Private.CoreLib.dll"
         $__BinDir/crossgen /Platform_Assemblies_Paths $__BinDir/IL $__IbcTuning /out $__BinDir/System.Private.CoreLib.dll $__BinDir/IL/System.Private.CoreLib.dll
         if [ $? -ne 0 ]; then
             echo "Failed to generate native image for System.Private.CoreLib."
@@ -605,6 +623,7 @@ __SkipNuget=0
 __SkipCoreCLR=0
 __SkipMSCorLib=0
 __SkipRestoreOptData=0
+__SkipCrossgen=0
 __CrossBuild=0
 __ClangMajorVersion=0
 __ClangMinorVersion=0
@@ -777,6 +796,10 @@ while :; do
             __SkipRestoreOptData=1
             ;;
 
+        skipcrossgen)
+            __SkipCrossgen=1
+            ;;
+
         includetests)
             ;;
 
@@ -893,7 +916,7 @@ __CrossComponentBinDir="$__BinDir"
 __CrossCompIntermediatesDir="$__IntermediatesDir/crossgen"
 
 __CrossArch="$__HostArch"
-if [[ "$__HostArch" == "x64" && "$__BuildArch" == "arm" ]]; then
+if [[ "$__HostArch" == "x64" && ("$__BuildArch" == "arm" || "$__BuildArch" == "armel") ]]; then
     __CrossArch="x86"
 fi
 if [ $__CrossBuild == 1 ]; then

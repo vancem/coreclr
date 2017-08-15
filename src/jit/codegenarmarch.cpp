@@ -324,9 +324,6 @@ void CodeGen::genCodeForTreeNode(GenTreePtr treeNode)
             genCodeForPhysReg(treeNode->AsPhysReg());
             break;
 
-        case GT_PHYSREGDST:
-            break;
-
         case GT_NULLCHECK:
             genCodeForNullCheck(treeNode->AsOp());
             break;
@@ -543,18 +540,30 @@ void CodeGen::genPutArgStk(GenTreePutArgStk* treeNode)
         // If it is contained then source must be the integer constant zero
         if (source->isContained())
         {
+#ifdef _TARGET_ARM64_
             assert(source->OperGet() == GT_CNS_INT);
             assert(source->AsIntConCommon()->IconValue() == 0);
-            NYI_ARM("genPutArgStk: contained zero source");
 
-#ifdef _TARGET_ARM64_
             emit->emitIns_S_R(storeIns, storeAttr, REG_ZR, varNumOut, argOffsetOut);
-#endif // _TARGET_ARM64_
+#else  // !_TARGET_ARM64_
+            // There is no zero register on ARM32
+            unreached();
+#endif // !_TARGET_ARM64
         }
         else
         {
             genConsumeReg(source);
             emit->emitIns_S_R(storeIns, storeAttr, source->gtRegNum, varNumOut, argOffsetOut);
+            if (compiler->opts.compUseSoftFP && targetType == TYP_LONG)
+            {
+                // This case currently only occurs for double types that are passed as TYP_LONG;
+                // actual long types would have been decomposed by now.
+                assert(source->IsCopyOrReload());
+                regNumber otherReg = (regNumber)source->AsCopyOrReload()->GetRegNumByIdx(1);
+                assert(otherReg != REG_NA);
+                argOffsetOut += EA_4BYTE;
+                emit->emitIns_S_R(storeIns, storeAttr, otherReg, varNumOut, argOffsetOut);
+            }
         }
         argOffsetOut += EA_SIZE_IN_BYTES(storeAttr);
         assert(argOffsetOut <= argOffsetMax); // We can't write beyound the outgoing area area
@@ -647,6 +656,11 @@ void CodeGen::genPutArgStk(GenTreePutArgStk* treeNode)
             // only used when we have a multireg struct with a LclVar source
             unsigned varNumInp = BAD_VAR_NUM;
 
+#ifdef _TARGET_ARM_
+            // On ARM32, size of reference map can be larger than MAX_ARG_REG_COUNT
+            gcPtrs     = treeNode->gtGcPtrs;
+            gcPtrCount = treeNode->gtNumberReferenceSlots;
+#endif
             // Setup the structSize, isHFa, and gcPtrCount
             if (varNode != nullptr)
             {
@@ -654,9 +668,10 @@ void CodeGen::genPutArgStk(GenTreePutArgStk* treeNode)
                 assert(varNumInp < compiler->lvaCount);
                 LclVarDsc* varDsc = &compiler->lvaTable[varNumInp];
 
+                // This struct also must live in the stack frame
+                // And it can't live in a register (SIMD)
                 assert(varDsc->lvType == TYP_STRUCT);
-                assert(varDsc->lvOnFrame);   // This struct also must live in the stack frame
-                assert(!varDsc->lvRegister); // And it can't live in a register (SIMD)
+                assert(varDsc->lvOnFrame && !varDsc->lvRegister);
 
                 structSize = varDsc->lvSize(); // This yields the roundUp size, but that is fine
                                                // as that is how much stack is allocated for this LclVar
@@ -665,9 +680,6 @@ void CodeGen::genPutArgStk(GenTreePutArgStk* treeNode)
                 gcPtrCount = varDsc->lvStructGcCount;
                 for (unsigned i = 0; i < gcPtrCount; ++i)
                     gcPtrs[i]   = varDsc->lvGcLayout[i];
-#else // _TARGET_ARM_
-                gcPtrs     = treeNode->gtGcPtrs;
-                gcPtrCount = treeNode->gtNumSlots;
 #endif // _TARGET_ARM_
             }
             else // addrNode is used
@@ -692,7 +704,9 @@ void CodeGen::genPutArgStk(GenTreePutArgStk* treeNode)
 
                 structSize = compiler->info.compCompHnd->getClassSize(objClass);
                 isHfa      = compiler->IsHfa(objClass);
+#ifdef _TARGET_ARM64_
                 gcPtrCount = compiler->info.compCompHnd->getClassGClayout(objClass, &gcPtrs[0]);
+#endif
             }
 
             // If we have an HFA we can't have any GC pointers,
@@ -905,133 +919,186 @@ void CodeGen::genPutArgSplit(GenTreePutArgSplit* treeNode)
 {
     assert(treeNode->OperIs(GT_PUTARG_SPLIT));
 
-    GenTreePtr source = treeNode->gtOp1;
-    emitter*   emit   = getEmitter();
+    GenTreePtr source       = treeNode->gtOp1;
+    emitter*   emit         = getEmitter();
+    unsigned   varNumOut    = compiler->lvaOutgoingArgSpaceVar;
+    unsigned   argOffsetMax = compiler->lvaOutgoingArgSpaceSize;
+    unsigned   argOffsetOut = treeNode->gtSlotNum * TARGET_POINTER_SIZE;
 
-    noway_assert(source->OperGet() == GT_OBJ);
-
-    var_types targetType = source->TypeGet();
-    noway_assert(varTypeIsStruct(targetType));
-
-    regNumber baseReg = treeNode->ExtractTempReg();
-    regNumber addrReg = REG_NA;
-
-    GenTreeLclVarCommon* varNode  = nullptr;
-    GenTreePtr           addrNode = nullptr;
-
-    addrNode = source->gtOp.gtOp1;
-
-    // addrNode can either be a GT_LCL_VAR_ADDR or an address expression
-    //
-    if (addrNode->OperGet() == GT_LCL_VAR_ADDR)
+    if (source->OperGet() == GT_FIELD_LIST)
     {
-        // We have a GT_OBJ(GT_LCL_VAR_ADDR)
+        GenTreeFieldList* fieldListPtr = source->AsFieldList();
+
+        // Evaluate each of the GT_FIELD_LIST items into their register
+        // and store their register into the outgoing argument area
+        for (unsigned idx = 0; fieldListPtr != nullptr; fieldListPtr = fieldListPtr->Rest(), idx++)
+        {
+            GenTreePtr nextArgNode = fieldListPtr->gtGetOp1();
+            regNumber  fieldReg    = nextArgNode->gtRegNum;
+            genConsumeReg(nextArgNode);
+
+            if (idx >= treeNode->gtNumRegs)
+            {
+                var_types type = nextArgNode->TypeGet();
+                emitAttr  attr = emitTypeSize(type);
+
+                // Emit store instructions to store the registers produced by the GT_FIELD_LIST into the outgoing
+                // argument area
+                emit->emitIns_S_R(ins_Store(type), attr, fieldReg, varNumOut, argOffsetOut);
+                argOffsetOut += EA_SIZE_IN_BYTES(attr);
+                assert(argOffsetOut <= argOffsetMax); // We can't write beyound the outgoing area area
+            }
+            else
+            {
+                var_types type   = treeNode->GetRegType(idx);
+                regNumber argReg = treeNode->GetRegNumByIdx(idx);
+
+                // If child node is not already in the register we need, move it
+                if (argReg != fieldReg)
+                {
+                    inst_RV_RV(ins_Copy(type), argReg, fieldReg, type);
+                }
+            }
+        }
+    }
+    else
+    {
+        var_types targetType = source->TypeGet();
+        assert(source->OperGet() == GT_OBJ);
+        assert(varTypeIsStruct(targetType));
+
+        regNumber baseReg = treeNode->ExtractTempReg();
+        regNumber addrReg = REG_NA;
+
+        GenTreeLclVarCommon* varNode  = nullptr;
+        GenTreePtr           addrNode = nullptr;
+
+        addrNode = source->gtOp.gtOp1;
+
+        // addrNode can either be a GT_LCL_VAR_ADDR or an address expression
         //
-        // We will treat this case the same as above
-        // (i.e if we just had this GT_LCL_VAR directly as the source)
-        // so update 'source' to point this GT_LCL_VAR_ADDR node
-        // and continue to the codegen for the LCL_VAR node below
-        //
-        varNode  = addrNode->AsLclVarCommon();
-        addrNode = nullptr;
-    }
+        if (addrNode->OperGet() == GT_LCL_VAR_ADDR)
+        {
+            // We have a GT_OBJ(GT_LCL_VAR_ADDR)
+            //
+            // We will treat this case the same as above
+            // (i.e if we just had this GT_LCL_VAR directly as the source)
+            // so update 'source' to point this GT_LCL_VAR_ADDR node
+            // and continue to the codegen for the LCL_VAR node below
+            //
+            varNode  = addrNode->AsLclVarCommon();
+            addrNode = nullptr;
+        }
 
-    // Either varNode or addrNOde must have been setup above,
-    // the xor ensures that only one of the two is setup, not both
-    assert((varNode != nullptr) ^ (addrNode != nullptr));
+        // Either varNode or addrNOde must have been setup above,
+        // the xor ensures that only one of the two is setup, not both
+        assert((varNode != nullptr) ^ (addrNode != nullptr));
 
-    // Setup the structSize, isHFa, and gcPtrCount
-    BYTE*    gcPtrs     = treeNode->gtGcPtrs;
-    unsigned gcPtrCount = treeNode->gtNumberReferenceSlots; // The count of GC pointers in the struct
-    int      structSize = treeNode->getArgSize();
-    bool     isHfa      = treeNode->gtIsHfa;
+        // Setup the structSize, isHFa, and gcPtrCount
+        BYTE*    gcPtrs     = treeNode->gtGcPtrs;
+        unsigned gcPtrCount = treeNode->gtNumberReferenceSlots; // The count of GC pointers in the struct
+        int      structSize = treeNode->getArgSize();
 
-    // This is the varNum for our load operations,
-    // only used when we have a struct with a LclVar source
-    unsigned srcVarNum = BAD_VAR_NUM;
-
-    if (varNode != nullptr)
-    {
-        srcVarNum = varNode->gtLclNum;
-        assert(srcVarNum < compiler->lvaCount);
-    }
-    else // addrNode is used
-    {
-        assert(addrNode != nullptr);
-
-        // Generate code to load the address that we need into a register
-        genConsumeAddress(addrNode);
-        addrReg = addrNode->gtRegNum;
-    }
-
-    // If we have an HFA we can't have any GC pointers,
-    // if not then the max size for the the struct is 16 bytes
-    if (isHfa)
-    {
-        noway_assert(gcPtrCount == 0);
-    }
-
-    unsigned varNumOut    = compiler->lvaOutgoingArgSpaceVar;
-    unsigned argOffsetMax = compiler->lvaOutgoingArgSpaceSize;
-    unsigned argOffsetOut = treeNode->gtSlotNum * TARGET_POINTER_SIZE;
-
-    // Put on stack first
-    unsigned nextIndex     = treeNode->gtNumRegs;
-    unsigned structOffset  = nextIndex * TARGET_POINTER_SIZE;
-    int      remainingSize = structSize - structOffset;
-
-    // remainingSize is always multiple of TARGET_POINTER_SIZE
-    assert(remainingSize % TARGET_POINTER_SIZE == 0);
-    while (remainingSize > 0)
-    {
-        var_types type = compiler->getJitGCType(gcPtrs[nextIndex]);
+        // This is the varNum for our load operations,
+        // only used when we have a struct with a LclVar source
+        unsigned srcVarNum = BAD_VAR_NUM;
 
         if (varNode != nullptr)
         {
-            // Load from our varNumImp source
-            emit->emitIns_R_S(INS_ldr, emitTypeSize(type), baseReg, srcVarNum, structOffset);
+            srcVarNum = varNode->gtLclNum;
+            assert(srcVarNum < compiler->lvaCount);
+
+            // handle promote situation
+            LclVarDsc* varDsc = compiler->lvaTable + srcVarNum;
+
+            // This struct also must live in the stack frame
+            // And it can't live in a register (SIMD)
+            assert(varDsc->lvType == TYP_STRUCT);
+            assert(varDsc->lvOnFrame && !varDsc->lvRegister);
+
+            // We don't split HFA struct
+            assert(!varDsc->lvIsHfa());
         }
-        else
+        else // addrNode is used
         {
-            // check for case of destroying the addrRegister while we still need it
+            assert(addrNode != nullptr);
+
+            // Generate code to load the address that we need into a register
+            genConsumeAddress(addrNode);
+            addrReg = addrNode->gtRegNum;
+
+            // If addrReg equal to baseReg, we use the last target register as alternative baseReg.
+            // Because the candidate mask for the internal baseReg does not include any of the target register,
+            // we can ensure that baseReg, addrReg, and the last target register are not all same.
             assert(baseReg != addrReg);
 
-            // Load from our address expression source
-            emit->emitIns_R_R_I(INS_ldr, emitTypeSize(type), baseReg, addrReg, structOffset);
+            // We don't split HFA struct
+            assert(!compiler->IsHfa(source->gtObj.gtClass));
         }
 
-        // Emit str instruction to store the register into the outgoing argument area
-        emit->emitIns_S_R(INS_str, emitTypeSize(type), baseReg, varNumOut, argOffsetOut);
-        argOffsetOut += TARGET_POINTER_SIZE;  // We stored 4-bytes of the struct
-        assert(argOffsetOut <= argOffsetMax); // We can't write beyound the outgoing area area
-        remainingSize -= TARGET_POINTER_SIZE; // We loaded 4-bytes of the struct
-        structOffset += TARGET_POINTER_SIZE;
-        nextIndex += 1;
-    }
+        // Put on stack first
+        unsigned nextIndex     = treeNode->gtNumRegs;
+        unsigned structOffset  = nextIndex * TARGET_POINTER_SIZE;
+        int      remainingSize = structSize - structOffset;
 
-    // Set registers
-    structOffset = 0;
-    for (unsigned idx = 0; idx < treeNode->gtNumRegs; idx++)
-    {
-        regNumber targetReg = treeNode->GetRegNumByIdx(idx);
-        var_types type      = treeNode->GetRegType(idx);
-
-        if (varNode != nullptr)
+        // remainingSize is always multiple of TARGET_POINTER_SIZE
+        assert(remainingSize % TARGET_POINTER_SIZE == 0);
+        while (remainingSize > 0)
         {
-            // Load from our varNumImp source
-            emit->emitIns_R_S(INS_ldr, emitTypeSize(type), targetReg, srcVarNum, structOffset);
+            var_types type = compiler->getJitGCType(gcPtrs[nextIndex]);
+
+            if (varNode != nullptr)
+            {
+                // Load from our varNumImp source
+                emit->emitIns_R_S(INS_ldr, emitTypeSize(type), baseReg, srcVarNum, structOffset);
+            }
+            else
+            {
+                // check for case of destroying the addrRegister while we still need it
+                assert(baseReg != addrReg);
+
+                // Load from our address expression source
+                emit->emitIns_R_R_I(INS_ldr, emitTypeSize(type), baseReg, addrReg, structOffset);
+            }
+
+            // Emit str instruction to store the register into the outgoing argument area
+            emit->emitIns_S_R(INS_str, emitTypeSize(type), baseReg, varNumOut, argOffsetOut);
+            argOffsetOut += TARGET_POINTER_SIZE;  // We stored 4-bytes of the struct
+            assert(argOffsetOut <= argOffsetMax); // We can't write beyound the outgoing area area
+            remainingSize -= TARGET_POINTER_SIZE; // We loaded 4-bytes of the struct
+            structOffset += TARGET_POINTER_SIZE;
+            nextIndex += 1;
         }
-        else
+
+        // We set up the registers in order, so that we assign the last target register `baseReg` is no longer in use,
+        // in case we had to reuse the last target register for it.
+        structOffset = 0;
+        for (unsigned idx = 0; idx < treeNode->gtNumRegs; idx++)
         {
-            // check for case of destroying the addrRegister while we still need it
-            assert(targetReg != addrReg);
+            regNumber targetReg = treeNode->GetRegNumByIdx(idx);
+            var_types type      = treeNode->GetRegType(idx);
 
-            // Load from our address expression source
-            emit->emitIns_R_R_I(INS_ldr, emitTypeSize(type), targetReg, addrReg, structOffset);
+            if (varNode != nullptr)
+            {
+                // Load from our varNumImp source
+                emit->emitIns_R_S(INS_ldr, emitTypeSize(type), targetReg, srcVarNum, structOffset);
+            }
+            else
+            {
+                // check for case of destroying the addrRegister while we still need it
+                if (targetReg == addrReg && idx != treeNode->gtNumRegs - 1)
+                {
+                    assert(targetReg != baseReg);
+                    emit->emitIns_R_R(INS_mov, emitTypeSize(type), baseReg, addrReg);
+                    addrReg = baseReg;
+                }
+
+                // Load from our address expression source
+                emit->emitIns_R_R_I(INS_ldr, emitTypeSize(type), targetReg, addrReg, structOffset);
+            }
+            structOffset += TARGET_POINTER_SIZE;
         }
-        structOffset += TARGET_POINTER_SIZE;
     }
-
     genProduceReg(treeNode);
 }
 #endif // _TARGET_ARM_
@@ -1730,8 +1797,11 @@ void CodeGen::genCallInstruction(GenTreeCall* call)
 
         GenTreePtr argNode = list->Current();
 
-        fgArgTabEntryPtr curArgTabEntry = compiler->gtArgEntryByNode(call, argNode->gtSkipReloadOrCopy());
+        fgArgTabEntryPtr curArgTabEntry = compiler->gtArgEntryByNode(call, argNode);
         assert(curArgTabEntry);
+
+        // GT_RELOAD/GT_COPY use the child node
+        argNode = argNode->gtSkipReloadOrCopy();
 
         if (curArgTabEntry->regNum == REG_STK)
             continue;
@@ -2052,7 +2122,7 @@ void CodeGen::genCallInstruction(GenTreeCall* call)
             }
             else
 #endif // _TARGET_ARM_
-                if (varTypeIsFloating(returnType))
+                if (varTypeIsFloating(returnType) && !compiler->opts.compUseSoftFP)
             {
                 returnReg = REG_FLOATRET;
             }
@@ -2063,7 +2133,20 @@ void CodeGen::genCallInstruction(GenTreeCall* call)
 
             if (call->gtRegNum != returnReg)
             {
-                inst_RV_RV(ins_Copy(returnType), call->gtRegNum, returnReg, returnType);
+#ifdef _TARGET_ARM_
+                if (compiler->opts.compUseSoftFP && returnType == TYP_DOUBLE)
+                {
+                    inst_RV_RV_RV(INS_vmov_i2d, call->gtRegNum, returnReg, genRegArgNext(returnReg), EA_8BYTE);
+                }
+                else if (compiler->opts.compUseSoftFP && returnType == TYP_FLOAT)
+                {
+                    inst_RV_RV(INS_vmov_i2f, call->gtRegNum, returnReg, returnType);
+                }
+                else
+#endif
+                {
+                    inst_RV_RV(ins_Copy(returnType), call->gtRegNum, returnReg, returnType);
+                }
             }
         }
 
@@ -2142,7 +2225,23 @@ void CodeGen::genJmpMethod(GenTreePtr jmp)
         var_types storeType = genActualType(varDsc->TypeGet());
         emitAttr  storeSize = emitActualTypeSize(storeType);
 
-        getEmitter()->emitIns_S_R(ins_Store(storeType), storeSize, varDsc->lvRegNum, varNum, 0);
+#ifdef _TARGET_ARM_
+        if (varDsc->TypeGet() == TYP_LONG)
+        {
+            // long - at least the low half must be enregistered
+            getEmitter()->emitIns_S_R(ins_Store(TYP_INT), EA_4BYTE, varDsc->lvRegNum, varNum, 0);
+
+            // Is the upper half also enregistered?
+            if (varDsc->lvOtherReg != REG_STK)
+            {
+                getEmitter()->emitIns_S_R(ins_Store(TYP_INT), EA_4BYTE, varDsc->lvOtherReg, varNum, sizeof(int));
+            }
+        }
+        else
+#endif // _TARGET_ARM_
+        {
+            getEmitter()->emitIns_S_R(ins_Store(storeType), storeSize, varDsc->lvRegNum, varNum, 0);
+        }
         // Update lvRegNum life and GC info to indicate lvRegNum is dead and varDsc stack slot is going live.
         // Note that we cannot modify varDsc->lvRegNum here because another basic block may not be expecting it.
         // Therefore manually update life of varDsc->lvRegNum.
@@ -2188,6 +2287,7 @@ void CodeGen::genJmpMethod(GenTreePtr jmp)
         regNumber argReg     = varDsc->lvArgReg; // incoming arg register
         regNumber argRegNext = REG_NA;
 
+#ifdef _TARGET_ARM64_
         if (varDsc->lvRegNum != argReg)
         {
             var_types loadType = TYP_UNDEF;
@@ -2215,7 +2315,6 @@ void CodeGen::genJmpMethod(GenTreePtr jmp)
             {
                 if (varDsc->lvIsHfa())
                 {
-                    NYI_ARM("CodeGen::genJmpMethod with multireg HFA arg");
                     NYI_ARM64("CodeGen::genJmpMethod with multireg HFA arg");
                 }
 
@@ -2255,6 +2354,104 @@ void CodeGen::genJmpMethod(GenTreePtr jmp)
                 firstArgVarNum = varNum;
             }
         }
+#else
+        bool      twoParts = false;
+        var_types loadType = TYP_UNDEF;
+        if (varDsc->TypeGet() == TYP_LONG)
+        {
+            twoParts = true;
+        }
+        else if (varDsc->TypeGet() == TYP_DOUBLE)
+        {
+            if (compiler->info.compIsVarArgs || compiler->opts.compUseSoftFP)
+            {
+                twoParts = true;
+            }
+        }
+
+        if (twoParts)
+        {
+            argRegNext = genRegArgNext(argReg);
+
+            if (varDsc->lvRegNum != argReg)
+            {
+                getEmitter()->emitIns_R_S(INS_ldr, EA_PTRSIZE, argReg, varNum, 0);
+                getEmitter()->emitIns_R_S(INS_ldr, EA_PTRSIZE, argRegNext, varNum, REGSIZE_BYTES);
+            }
+
+            if (compiler->info.compIsVarArgs)
+            {
+                fixedIntArgMask |= genRegMask(argReg);
+                fixedIntArgMask |= genRegMask(argRegNext);
+            }
+        }
+        else if (varDsc->lvIsHfaRegArg())
+        {
+            loadType           = varDsc->GetHfaType();
+            regNumber fieldReg = argReg;
+            emitAttr  loadSize = emitActualTypeSize(loadType);
+            unsigned  maxSize  = min(varDsc->lvSize(), (LAST_FP_ARGREG + 1 - argReg) * REGSIZE_BYTES);
+
+            for (unsigned ofs = 0; ofs < maxSize; ofs += (unsigned)loadSize)
+            {
+                if (varDsc->lvRegNum != argReg)
+                {
+                    getEmitter()->emitIns_R_S(ins_Load(loadType), loadSize, fieldReg, varNum, ofs);
+                }
+                assert(genIsValidFloatReg(fieldReg)); // we don't use register tracking for FP
+                fieldReg = regNextOfType(fieldReg, loadType);
+            }
+        }
+        else if (varTypeIsStruct(varDsc))
+        {
+            regNumber slotReg = argReg;
+            unsigned  maxSize = min(varDsc->lvSize(), (REG_ARG_LAST + 1 - argReg) * REGSIZE_BYTES);
+
+            for (unsigned ofs = 0; ofs < maxSize; ofs += REGSIZE_BYTES)
+            {
+                unsigned idx = ofs / REGSIZE_BYTES;
+                loadType     = compiler->getJitGCType(varDsc->lvGcLayout[idx]);
+
+                if (varDsc->lvRegNum != argReg)
+                {
+                    emitAttr loadSize = emitActualTypeSize(loadType);
+
+                    getEmitter()->emitIns_R_S(ins_Load(loadType), loadSize, slotReg, varNum, ofs);
+                }
+
+                regSet.AddMaskVars(genRegMask(slotReg));
+                gcInfo.gcMarkRegPtrVal(slotReg, loadType);
+                if (genIsValidIntReg(slotReg) && compiler->info.compIsVarArgs)
+                {
+                    fixedIntArgMask |= genRegMask(slotReg);
+                }
+
+                slotReg = genRegArgNext(slotReg);
+            }
+        }
+        else
+        {
+            loadType = compiler->mangleVarArgsType(genActualType(varDsc->TypeGet()));
+
+            if (varDsc->lvRegNum != argReg)
+            {
+                getEmitter()->emitIns_R_S(ins_Load(loadType), emitTypeSize(loadType), argReg, varNum, 0);
+            }
+
+            regSet.AddMaskVars(genRegMask(argReg));
+            gcInfo.gcMarkRegPtrVal(argReg, loadType);
+
+            if (genIsValidIntReg(argReg) && compiler->info.compIsVarArgs)
+            {
+                fixedIntArgMask |= genRegMask(argReg);
+            }
+        }
+
+        if (compiler->lvaIsGCTracked(varDsc))
+        {
+            VarSetOps::RemoveElemD(compiler, gcInfo.gcVarPtrSetCur, varNum);
+        }
+#endif
     }
 
     // Jmp call to a vararg method - if the method has fewer than fixed arguments that can be max size of reg,

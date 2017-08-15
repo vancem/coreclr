@@ -85,6 +85,10 @@ class CSE_DataFlow; // defined in OptCSE.cpp
 struct IndentStack;
 #endif
 
+#ifndef LEGACY_BACKEND
+class Lowering; // defined in lower.h
+#endif
+
 // The following are defined in this file, Compiler.h
 
 class Compiler;
@@ -910,6 +914,7 @@ class LinearScanInterface
 public:
     virtual void doLinearScan()                                = 0;
     virtual void recordVarLocationsAtStartOfBB(BasicBlock* bb) = 0;
+    virtual bool willEnregisterLocalVars() const               = 0;
 };
 
 LinearScanInterface* getLinearScanAllocator(Compiler* comp);
@@ -1983,8 +1988,6 @@ public:
 
     GenTree* gtNewPhysRegNode(regNumber reg, var_types type);
 
-    GenTree* gtNewPhysRegNode(regNumber reg, GenTree* src);
-
     GenTreePtr gtNewJmpTableNode();
     GenTreePtr gtNewIconHandleNode(
         size_t value, unsigned flags, FieldSeqNode* fields = nullptr, unsigned handle1 = 0, void* handle2 = nullptr);
@@ -2225,6 +2228,7 @@ public:
         gtFoldExprConst(GenTreePtr tree);
     GenTreePtr gtFoldExprSpecial(GenTreePtr tree);
     GenTreePtr gtFoldExprCompare(GenTreePtr tree);
+    bool gtTryRemoveBoxUpstreamEffects(GenTreePtr tree);
 
     //-------------------------------------------------------------------------
     // Get the handle, if any.
@@ -2758,12 +2762,11 @@ public:
 
 #if defined(_TARGET_64BIT_)
         assert(varDsc->lvSize() == 16);
-        return true;
-#else // !defined(_TARGET_64BIT_)
+#endif // defined(_TARGET_64BIT_)
 
-        // For 32-bit architectures, we make local variable SIMD12 types 16 bytes instead of just 12. lvSize()
+        // We make local variable SIMD12 types 16 bytes instead of just 12. lvSize()
         // already does this calculation. However, we also need to prevent mapping types if the var is a
-        // depenendently promoted struct field, which must remain its exact size within its parent struct.
+        // dependently promoted struct field, which must remain its exact size within its parent struct.
         // However, we don't know this until late, so we may have already pretended the field is bigger
         // before that.
         if ((varDsc->lvSize() == 16) && !lvaIsFieldOfDependentlyPromotedStruct(varDsc))
@@ -2774,8 +2777,6 @@ public:
         {
             return false;
         }
-
-#endif // !defined(_TARGET_64BIT_)
     }
 #endif // defined(FEATURE_SIMD)
 
@@ -2927,9 +2928,11 @@ protected:
                             IL_OFFSET          rawILOffset);
 
     void impDevirtualizeCall(GenTreeCall*            call,
-                             GenTreePtr              obj,
-                             CORINFO_CALL_INFO*      callInfo,
-                             CORINFO_CONTEXT_HANDLE* exactContextHnd);
+                             GenTreePtr              thisObj,
+                             CORINFO_METHOD_HANDLE*  method,
+                             unsigned*               methodFlags,
+                             CORINFO_CONTEXT_HANDLE* contextHandle,
+                             CORINFO_CONTEXT_HANDLE* exactContextHandle);
 
     bool impMethodInfo_hasRetBuffArg(CORINFO_METHOD_INFO* methInfo);
 
@@ -3612,9 +3615,8 @@ public:
     bool fgFuncletsCreated; // true if the funclet creation phase has been run
 #endif                      // FEATURE_EH_FUNCLETS
 
-    bool fgGlobalMorph;  // indicates if we are during the global morphing phase
-                         // since fgMorphTree can be called from several places
-    bool fgExpandInline; // indicates that we are creating tree for the inliner
+    bool fgGlobalMorph; // indicates if we are during the global morphing phase
+                        // since fgMorphTree can be called from several places
 
     bool     impBoxTempInUse; // the temp below is valid and available
     unsigned impBoxTemp;      // a temporary that is used for boxing
@@ -3649,6 +3651,16 @@ public:
     void fgCleanupContinuation(BasicBlock* continuation);
 
     void fgUpdateFinallyTargetFlags();
+
+    void fgClearAllFinallyTargetBits();
+
+    void fgAddFinallyTargetFlags();
+
+#if FEATURE_EH_FUNCLETS && defined(_TARGET_ARM_)
+    // Sometimes we need to defer updating the BBF_FINALLY_TARGET bit. fgNeedToAddFinallyTargetBits signals
+    // when this is necessary.
+    bool fgNeedToAddFinallyTargetBits;
+#endif // FEATURE_EH_FUNCLETS && defined(_TARGET_ARM_)
 
     bool fgRetargetBranchesToCanonicalCallFinally(BasicBlock*      block,
                                                   BasicBlock*      handler,
@@ -3724,6 +3736,15 @@ public:
 
     GenTreeCall* fgGetSharedCCtor(CORINFO_CLASS_HANDLE cls);
 
+    inline bool backendRequiresLocalVarLifetimes()
+    {
+#if defined(LEGACY_BACKEND)
+        return true;
+#else
+        return !opts.MinOpts() || m_pLinearScan->willEnregisterLocalVars();
+#endif
+    }
+
     void fgLocalVarLiveness();
 
     void fgLocalVarLivenessInit();
@@ -3747,6 +3768,8 @@ public:
     bool fgMarkIntf(VARSET_VALARG_TP varSet);
 
     bool fgMarkIntf(VARSET_VALARG_TP varSet1, VARSET_VALARG_TP varSet2);
+
+    bool fgMarkIntf(VARSET_VALARG_TP varSet1, unsigned varIndex);
 
     void fgUpdateRefCntForClone(BasicBlock* addedToBlock, GenTreePtr clonedTree);
 
@@ -4429,7 +4452,7 @@ public:
     void fgTableDispBasicBlock(BasicBlock* block, int ibcColWidth = 0);
     void fgDispBasicBlocks(BasicBlock* firstBlock, BasicBlock* lastBlock, bool dumpTrees);
     void fgDispBasicBlocks(bool dumpTrees = false);
-    void fgDumpStmtTree(GenTreePtr stmt, unsigned blkNum);
+    void fgDumpStmtTree(GenTreePtr stmt, unsigned bbNum);
     void fgDumpBlock(BasicBlock* block);
     void fgDumpTrees(BasicBlock* firstBlock, BasicBlock* lastBlock);
 
@@ -4456,12 +4479,6 @@ public:
 
     static GenTreePtr fgGetFirstNode(GenTreePtr tree);
     static bool fgTreeIsInStmt(GenTree* tree, GenTreeStmt* stmt);
-
-    inline bool fgIsInlining()
-    {
-        return fgExpandInline;
-    }
-
     void fgTraverseRPO();
 
     //--------------------- Walking the trees in the IR -----------------------
@@ -6240,6 +6257,7 @@ public:
 
 private:
 #ifndef LEGACY_BACKEND
+    Lowering*            m_pLowering;   // Lowering; needed to Lower IR that's added or modified after Lowering.
     LinearScanInterface* m_pLinearScan; // Linear Scan allocator
 #else                                   // LEGACY_BACKEND
     unsigned  raAvoidArgRegMask;       // Mask of incoming argument registers that we may need to avoid
@@ -6649,8 +6667,16 @@ public:
                 regMask = RBM_R11;
             }
 #elif defined(_TARGET_ARM_)
-            reg     = REG_R4;
-            regMask = RBM_R4;
+            if (isCoreRTABI)
+            {
+                reg     = REG_R12;
+                regMask = RBM_R12;
+            }
+            else
+            {
+                reg     = REG_R4;
+                regMask = RBM_R4;
+            }
 #elif defined(_TARGET_ARM64_)
             reg     = REG_R11;
             regMask = RBM_R11;
@@ -7745,11 +7771,13 @@ public:
     bool compQmarkRationalized;    // Is it allowed to use a GT_QMARK/GT_COLON node.
     bool compUnsafeCastUsed;       // Does the method use LDIND/STIND to cast between scalar/refernce types
 
-    // NOTE: These values are only reliable after
-    //       the importing is completely finished.
+// NOTE: These values are only reliable after
+//       the importing is completely finished.
 
+#ifdef LEGACY_BACKEND
     ExpandArrayStack<GenTreePtr>* compQMarks; // The set of QMark nodes created in the current compilation, so
                                               // we can iterate over these efficiently.
+#endif
 
 #if CPU_USES_BLOCK_MOVE
     bool compBlkOpUsed; // Does the method do a COPYBLK or INITBLK
@@ -9580,6 +9608,7 @@ public:
             case GT_RELOAD:
             case GT_ARR_LENGTH:
             case GT_CAST:
+            case GT_BITCAST:
             case GT_CKFINITE:
             case GT_LCLHEAP:
             case GT_ADDR:
@@ -9592,7 +9621,6 @@ public:
             case GT_JTRUE:
             case GT_SWITCH:
             case GT_NULLCHECK:
-            case GT_PHYSREGDST:
             case GT_PUTARG_REG:
             case GT_PUTARG_STK:
             case GT_RETURNTRAP:

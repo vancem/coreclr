@@ -731,6 +731,7 @@ Compiler::fgWalkResult Rationalizer::RewriteNode(GenTree** useEdge, ArrayStack<G
             {
                 use.ReplaceWith(comp, node->gtGetOp1());
                 BlockRange().Remove(node);
+                node = node->gtGetOp1();
             }
             break;
 
@@ -750,9 +751,9 @@ Compiler::fgWalkResult Rationalizer::RewriteNode(GenTree** useEdge, ArrayStack<G
 
                 BlockRange().Delete(comp, m_block, std::move(lhsRange));
             }
-            else
+            else if (op1->IsValue())
             {
-                op1->gtLIRFlags |= LIR::Flags::IsUnusedValue;
+                op1->SetUnusedValue();
             }
 
             BlockRange().Remove(node);
@@ -953,9 +954,9 @@ Compiler::fgWalkResult Rationalizer::RewriteNode(GenTree** useEdge, ArrayStack<G
             node->gtFlags &= ~GTF_CALL;
         }
 
-        if (use.IsDummyUse())
+        if (node->IsValue() && use.IsDummyUse())
         {
-            node->gtLIRFlags |= LIR::Flags::IsUnusedValue;
+            node->SetUnusedValue();
         }
 
         if (node->TypeGet() == TYP_LONG)
@@ -993,9 +994,6 @@ void Rationalizer::DoPhase()
         // This needs to be done before the transition to LIR because it relies on the use
         // of fgMorphArgs, which is designed to operate on HIR. Once this is done for a
         // particular statement, link that statement's nodes into the current basic block.
-        //
-        // This visit also clears the GTF_VAR_USEDEF bit on locals, which is not necessary
-        // in the backend.
         fgWalkResult PreOrderVisit(GenTree** use, GenTree* user)
         {
             GenTree* const node = *use;
@@ -1003,10 +1001,6 @@ void Rationalizer::DoPhase()
                 Compiler::IsIntrinsicImplementedByUserCall(node->gtIntrinsic.gtIntrinsicId))
             {
                 m_rationalizer.RewriteIntrinsicAsUserCall(use, this->m_ancestors);
-            }
-            else if (node->OperIsLocal())
-            {
-                node->gtFlags &= ~GTF_VAR_USEDEF;
             }
 
             return Compiler::WALK_CONTINUE;

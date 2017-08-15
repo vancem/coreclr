@@ -407,8 +407,6 @@ typedef ptrdiff_t ssize_t;
 
 #define CSE_INTO_HANDLERS 0
 
-#define CAN_DISABLE_DFA 1 // disable data flow for minopts
-
 #define LARGE_EXPSET 1   // Track 64 or 32 assertions/copies/consts/rangechecks
 #define ASSERTION_PROP 1 // Enable value/assertion propagation
 
@@ -516,11 +514,10 @@ const bool dspGCtbls = true;
 #endif // !DEBUG
 
 #ifdef DEBUG
-void JitDump(const char* pcFormat, ...);
 #define JITDUMP(...)                                                                                                   \
     {                                                                                                                  \
         if (JitTls::GetCompiler()->verbose)                                                                            \
-            JitDump(__VA_ARGS__);                                                                                      \
+            logf(__VA_ARGS__);                                                                                         \
     }
 #define JITLOG(x)                                                                                                      \
     {                                                                                                                  \

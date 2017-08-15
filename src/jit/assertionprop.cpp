@@ -168,16 +168,17 @@ void Compiler::optAddCopies()
 
         bool isDominatedByFirstBB = false;
 
-        BLOCKSET_ITER_INIT(this, iter, varDsc->lvRefBlks, blkNum);
-        while (iter.NextElem(&blkNum))
+        BlockSetOps::Iter iter(this, varDsc->lvRefBlks);
+        unsigned          bbNum = 0;
+        while (iter.NextElem(&bbNum))
         {
-            /* Find the block 'blkNum' */
+            /* Find the block 'bbNum' */
             BasicBlock* block = fgFirstBB;
-            while (block && (block->bbNum != blkNum))
+            while (block && (block->bbNum != bbNum))
             {
                 block = block->bbNext;
             }
-            noway_assert(block && (block->bbNum == blkNum));
+            noway_assert(block && (block->bbNum == bbNum));
 
             bool     importantUseInBlock = (varDsc->lvIsParam) && (block->getBBWeight(this) > paramAvgWtdRefDiv2);
             bool     isPreHeaderBlock    = ((block->bbFlags & BBF_LOOP_PREHEADER) != 0);
@@ -214,7 +215,7 @@ void Compiler::optAddCopies()
 #ifdef DEBUG
             if (verbose)
             {
-                printf("        Referenced in BB%02u, bbWeight is %s", blkNum, refCntWtd2str(block->getBBWeight(this)));
+                printf("        Referenced in BB%02u, bbWeight is %s", bbNum, refCntWtd2str(block->getBBWeight(this)));
 
                 if (isDominatedByFirstBB)
                 {
@@ -320,17 +321,17 @@ void Compiler::optAddCopies()
 #endif
 
             /* We have already calculated paramImportantUseDom above. */
-
-            BLOCKSET_ITER_INIT(this, iter, paramImportantUseDom, blkNum);
-            while (iter.NextElem(&blkNum))
+            BlockSetOps::Iter iter(this, paramImportantUseDom);
+            unsigned          bbNum = 0;
+            while (iter.NextElem(&bbNum))
             {
-                /* Advance block to point to 'blkNum' */
+                /* Advance block to point to 'bbNum' */
                 /* This assumes that the iterator returns block number is increasing lexical order. */
-                while (block && (block->bbNum != blkNum))
+                while (block && (block->bbNum != bbNum))
                 {
                     block = block->bbNext;
                 }
-                noway_assert(block && (block->bbNum == blkNum));
+                noway_assert(block && (block->bbNum == bbNum));
 
 #ifdef DEBUG
                 if (verbose)
@@ -523,7 +524,7 @@ ASSERT_TP& Compiler::GetAssertionDep(unsigned lclNum)
 
 void Compiler::optAssertionTraitsInit(AssertionIndex assertionCount)
 {
-    apTraits = new (getAllocator()) BitVecTraits(assertionCount, this);
+    apTraits = new (this, CMK_AssertionProp) BitVecTraits(assertionCount, this);
     apFull   = BitVecOps::MakeFull(apTraits);
 }
 
@@ -546,9 +547,9 @@ void Compiler::optAssertionInit(bool isLocalProp)
     optMaxAssertionCount                    = countFunc[isLocalProp ? lowerBound : min(upperBound, codeSize)];
 
     optLocalAssertionProp  = isLocalProp;
-    optAssertionTabPrivate = new (getAllocator()) AssertionDsc[optMaxAssertionCount];
+    optAssertionTabPrivate = new (this, CMK_AssertionProp) AssertionDsc[optMaxAssertionCount];
     optComplementaryAssertionMap =
-        new (getAllocator()) AssertionIndex[optMaxAssertionCount](); // zero-inited (NO_ASSERTION_INDEX.)
+        new (this, CMK_AssertionProp) AssertionIndex[optMaxAssertionCount + 1](); // zero-inited (NO_ASSERTION_INDEX)
     assert(NO_ASSERTION_INDEX == 0);
 
     if (!isLocalProp)
@@ -558,7 +559,7 @@ void Compiler::optAssertionInit(bool isLocalProp)
 
     if (optAssertionDep == nullptr)
     {
-        optAssertionDep = new (getAllocator()) ExpandArray<ASSERT_TP>(getAllocator(), max(1, lvaCount));
+        optAssertionDep = new (this, CMK_AssertionProp) ExpandArray<ASSERT_TP>(getAllocator(), max(1, lvaCount));
     }
 
     optAssertionTraitsInit(optMaxAssertionCount);
@@ -2149,6 +2150,10 @@ void Compiler::optMapComplementary(AssertionIndex assertionIndex, AssertionIndex
     {
         return;
     }
+
+    assert(assertionIndex <= optMaxAssertionCount);
+    assert(index <= optMaxAssertionCount);
+
     optComplementaryAssertionMap[assertionIndex] = index;
     optComplementaryAssertionMap[index]          = assertionIndex;
 }

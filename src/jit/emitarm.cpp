@@ -2459,6 +2459,16 @@ void emitter::emitIns_R_R_I(instruction ins,
                 fmt = IF_T2_M0;
                 sf  = INS_FLAGS_NOT_SET;
             }
+            else if (insDoesNotSetFlags(flags) && (reg1 != REG_SP) && (reg1 != REG_PC))
+            {
+                // movw,movt reg1, imm
+                codeGen->instGen_Set_Reg_To_Imm(attr, reg1, (ins == INS_sub ? -1 : 1) * imm);
+
+                // ins reg1, reg2
+                emitIns_R_R(INS_add, attr, reg1, reg2);
+
+                return;
+            }
             else
             {
                 assert(!"Instruction cannot be encoded");
@@ -7558,19 +7568,68 @@ void emitter::emitDispFrameRef(int varx, int disp, int offs, bool asmfm)
 
 void emitter::emitInsLoadStoreOp(instruction ins, emitAttr attr, regNumber dataReg, GenTreeIndir* indir)
 {
+    // Handle unaligned floating point loads/stores
+    if ((indir->gtFlags & GTF_IND_UNALIGNED))
+    {
+        if (indir->OperGet() == GT_STOREIND)
+        {
+            var_types type = indir->AsStoreInd()->Data()->TypeGet();
+            if (type == TYP_FLOAT)
+            {
+                regNumber tmpReg = indir->GetSingleTempReg();
+                emitIns_R_R(INS_vmov_f2i, EA_4BYTE, tmpReg, dataReg);
+                emitInsLoadStoreOp(INS_str, EA_4BYTE, tmpReg, indir, 0);
+                return;
+            }
+            else if (type == TYP_DOUBLE)
+            {
+                regNumber tmpReg1 = indir->ExtractTempReg();
+                regNumber tmpReg2 = indir->GetSingleTempReg();
+                emitIns_R_R_R(INS_vmov_d2i, EA_8BYTE, tmpReg1, tmpReg2, dataReg);
+                emitInsLoadStoreOp(INS_str, EA_4BYTE, tmpReg1, indir, 0);
+                emitInsLoadStoreOp(INS_str, EA_4BYTE, tmpReg2, indir, 4);
+                return;
+            }
+        }
+        else if (indir->OperGet() == GT_IND)
+        {
+            var_types type = indir->TypeGet();
+            if (type == TYP_FLOAT)
+            {
+                regNumber tmpReg = indir->GetSingleTempReg();
+                emitInsLoadStoreOp(INS_ldr, EA_4BYTE, tmpReg, indir, 0);
+                emitIns_R_R(INS_vmov_i2f, EA_4BYTE, dataReg, tmpReg);
+                return;
+            }
+            else if (type == TYP_DOUBLE)
+            {
+                regNumber tmpReg1 = indir->ExtractTempReg();
+                regNumber tmpReg2 = indir->GetSingleTempReg();
+                emitInsLoadStoreOp(INS_ldr, EA_4BYTE, tmpReg1, indir, 0);
+                emitInsLoadStoreOp(INS_ldr, EA_4BYTE, tmpReg2, indir, 4);
+                emitIns_R_R_R(INS_vmov_i2d, EA_8BYTE, dataReg, tmpReg1, tmpReg2);
+                return;
+            }
+        }
+    }
+
+    // Proceed with ordinary loads/stores
+    emitInsLoadStoreOp(ins, attr, dataReg, indir, 0);
+}
+
+void emitter::emitInsLoadStoreOp(instruction ins, emitAttr attr, regNumber dataReg, GenTreeIndir* indir, int offset)
+{
     GenTree* addr = indir->Addr();
-    GenTree* data = indir->gtOp.gtOp2;
 
     if (addr->isContained())
     {
         assert(addr->OperGet() == GT_LCL_VAR_ADDR || addr->OperGet() == GT_LEA);
 
-        int   offset = 0;
-        DWORD lsl    = 0;
+        DWORD lsl = 0;
 
         if (addr->OperGet() == GT_LEA)
         {
-            offset = (int)addr->AsAddrMode()->gtOffset;
+            offset += (int)addr->AsAddrMode()->gtOffset;
             if (addr->AsAddrMode()->gtScale > 0)
             {
                 assert(isPow2(addr->AsAddrMode()->gtScale));
@@ -7660,7 +7719,15 @@ void emitter::emitInsLoadStoreOp(instruction ins, emitAttr attr, regNumber dataR
     }
     else
     {
-        emitIns_R_R(ins, attr, dataReg, addr->gtRegNum);
+        if (offset != 0)
+        {
+            assert(emitIns_valid_imm_for_add(offset, INS_FLAGS_DONT_CARE));
+            emitIns_R_R_I(ins, attr, dataReg, addr->gtRegNum, offset);
+        }
+        else
+        {
+            emitIns_R_R(ins, attr, dataReg, addr->gtRegNum);
+        }
     }
 }
 

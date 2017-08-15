@@ -25,11 +25,6 @@ SET_DEFAULT_DEBUG_CHANNEL(NUMA);
 #include "pal/corunix.hpp"
 #include "pal/thread.hpp"
 
-#if HAVE_NUMA_H
-#include <numa.h>
-#include <numaif.h>
-#endif
-
 #if HAVE_PTHREAD_NP_H
 #include <pthread_np.h>
 #endif
@@ -78,6 +73,12 @@ int g_highestNumaNode = 0;
 bool g_numaAvailable = false;
 
 void* numaHandle = nullptr;
+
+#if HAVE_NUMA_H
+#define PER_FUNCTION_BLOCK(fn) decltype(fn)* fn##_ptr;
+FOR_ALL_NUMA_FUNCTIONS
+#undef PER_FUNCTION_BLOCK
+#endif // HAVE_NUMA_H
 
 static const int MaxCpusPerGroup = 8 * sizeof(KAFFINITY);
 static const WORD NO_GROUP = 0xffff;
@@ -161,7 +162,7 @@ NUMASupportInitialize()
 FOR_ALL_NUMA_FUNCTIONS
 #undef PER_FUNCTION_BLOCK
 
-        if (numa_available() != -1)
+        if (numa_available() == -1)
         {
             dlclose(numaHandle);
         }
@@ -234,8 +235,8 @@ FOR_ALL_NUMA_FUNCTIONS
             g_highestNumaNode = numa_max_node();
         }
     }
-    else
 #endif // HAVE_NUMA_H
+    if (!g_numaAvailable)
     {
         // No NUMA
         g_possibleCpuCount = PAL_GetLogicalCpuCountFromOS();
@@ -472,11 +473,24 @@ GetThreadGroupAffinity(
 {
     PERF_ENTRY(GetThreadGroupAffinity);
     ENTRY("GetThreadGroupAffinity(hThread=%p, GroupAffinity=%p)\n", hThread, GroupAffinity);
+    CPalThread *pCurrentThread = InternalGetCurrentThread();
+    CPalThread *pTargetThread = NULL;
+    IPalObject *pTargetThreadObject = NULL;
 
-    CPalThread *palThread = InternalGetCurrentThread();
+    PAL_ERROR palErr =
+        InternalGetThreadDataFromHandle(pCurrentThread, hThread,
+                                        0, // THREAD_SET_CONTEXT
+                                        &pTargetThread, &pTargetThreadObject);
 
-    BOOL success = GetThreadGroupAffinityInternal(palThread->GetPThreadSelf(), GroupAffinity);
+    if (NO_ERROR != palErr)
+    {
+        ERROR("Unable to obtain thread data for handle %p (error %x)!\n", hThread,
+              palErr);
+        return FALSE;
+    }
 
+    BOOL success = GetThreadGroupAffinityInternal(
+        pTargetThread->GetPThreadSelf(), GroupAffinity);
     LOGEXIT("GetThreadGroupAffinity returns BOOL %d\n", success);
     PERF_EXIT(GetThreadGroupAffinity);
 
@@ -501,9 +515,23 @@ SetThreadGroupAffinity(
     PERF_ENTRY(SetThreadGroupAffinity);
     ENTRY("SetThreadGroupAffinity(hThread=%p, GroupAffinity=%p, PreviousGroupAffinity=%p)\n", hThread, GroupAffinity, PreviousGroupAffinity);
 
-    CPalThread *palThread = InternalGetCurrentThread();
+    CPalThread *pCurrentThread = InternalGetCurrentThread();
+    CPalThread *pTargetThread = NULL;
+    IPalObject *pTargetThreadObject = NULL;
 
-    pthread_t thread = palThread->GetPThreadSelf();
+    PAL_ERROR palErr =
+        InternalGetThreadDataFromHandle(pCurrentThread, hThread,
+                                        0, // THREAD_SET_CONTEXT
+                                        &pTargetThread, &pTargetThreadObject);
+
+    if (NO_ERROR != palErr)
+    {
+        ERROR("Unable to obtain thread data for handle %p (error %x)!\n", hThread,
+              palErr);
+        return FALSE;
+    }
+
+    pthread_t thread = pTargetThread->GetPThreadSelf();
 
     if (PreviousGroupAffinity != NULL)
     {
@@ -530,20 +558,20 @@ SetThreadGroupAffinity(
 
     int st = pthread_setaffinity_np(thread, sizeof(cpu_set_t), &cpuSet);
 
-    if (st == -1)
+    if (st != 0)
     {
-        switch (errno)
+        switch (st)
         {
-            case EINVAL:
-                // There is no processor in the mask that is allowed to execute the process
-                SetLastError(ERROR_INVALID_PARAMETER);
-                break;
-            case EPERM:
-                SetLastError(ERROR_ACCESS_DENIED);
-                break;
-            default:
-                SetLastError(ERROR_GEN_FAILURE);
-                break;
+        case EINVAL:
+            // There is no processor in the mask that is allowed to execute the process
+            SetLastError(ERROR_INVALID_PARAMETER);
+            break;
+        case ESRCH:
+            SetLastError(ERROR_INVALID_HANDLE);
+            break;
+        default:
+            SetLastError(ERROR_GEN_FAILURE);
+            break;
         }
     }
 
@@ -557,6 +585,103 @@ SetThreadGroupAffinity(
     PERF_EXIT(SetThreadGroupAffinity);
 
     return success;
+}
+
+/*++
+Function:
+  SetThreadAffinityMask
+
+See MSDN doc.
+--*/
+DWORD_PTR
+PALAPI
+SetThreadAffinityMask(
+  IN HANDLE hThread,
+  IN DWORD_PTR dwThreadAffinityMask
+)
+{
+    PERF_ENTRY(SetThreadAffinityMask);
+    ENTRY("SetThreadAffinityMask(hThread=%p, dwThreadAffinityMask=%p)\n", hThread, dwThreadAffinityMask);
+
+    CPalThread *pCurrentThread = InternalGetCurrentThread();
+    CPalThread *pTargetThread = NULL;
+    IPalObject *pTargetThreadObject = NULL;
+
+    PAL_ERROR palErr =
+        InternalGetThreadDataFromHandle(pCurrentThread, hThread,
+                                        0, // THREAD_SET_CONTEXT
+                                        &pTargetThread, &pTargetThreadObject);
+
+    if (NO_ERROR != palErr)
+    {
+        ERROR("Unable to obtain thread data for handle %p (error %x)!\n", hThread,
+              palErr);
+        return 0;
+    }
+
+    pthread_t thread = pTargetThread->GetPThreadSelf();
+
+#if HAVE_PTHREAD_GETAFFINITY_NP
+    cpu_set_t prevCpuSet;
+    CPU_ZERO(&prevCpuSet);
+    KAFFINITY prevMask = 0;
+
+    int st = pthread_getaffinity_np(thread, sizeof(cpu_set_t), &prevCpuSet);
+
+    if (st == 0)
+    {
+        for (int i = 0; i < min(8 * sizeof(KAFFINITY), g_possibleCpuCount); i++)
+        {
+            if (CPU_ISSET(i, &prevCpuSet))
+            {
+                prevMask |= ((KAFFINITY)1) << i;
+            }
+        }
+    }
+
+    cpu_set_t cpuSet;
+    CPU_ZERO(&cpuSet);
+
+    int cpu = 0;
+    while (dwThreadAffinityMask)
+    {
+        if (dwThreadAffinityMask & 1)
+        {
+            CPU_SET(cpu, &cpuSet);
+        }
+        cpu++;
+        dwThreadAffinityMask >>= 1;
+    }
+
+    st = pthread_setaffinity_np(thread, sizeof(cpu_set_t), &cpuSet);
+
+    if (st != 0)
+    {
+        switch (st)
+        {
+        case EINVAL:
+            // There is no processor in the mask that is allowed to execute the
+            // process
+            SetLastError(ERROR_INVALID_PARAMETER);
+            break;
+        case ESRCH:
+            SetLastError(ERROR_INVALID_HANDLE);
+            break;
+        default:
+            SetLastError(ERROR_GEN_FAILURE);
+            break;
+        }
+    }
+
+    DWORD_PTR ret = (st == 0) ? prevMask : 0;
+#else  // HAVE_PTHREAD_GETAFFINITY_NP
+    // There is no API to manage thread affinity, so let's ignore the request
+    DWORD_PTR ret = 0;
+#endif // HAVE_PTHREAD_GETAFFINITY_NP
+    LOGEXIT("SetThreadAffinityMask returns  %lu\n", ret);
+    PERF_EXIT(SetThreadAffinityMask);
+
+    return ret;
 }
 
 /*++

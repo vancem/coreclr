@@ -86,9 +86,12 @@ if /i "%1" == "targetsNonWindows"     (set __TargetsWindows=0&set processedArgs=
 if /i "%1" == "Exclude"               (set __Exclude=%2&set processedArgs=!processedArgs! %1 %2&shift&shift&goto Arg_Loop)
 
 if [!processedArgs!]==[] (
-  call set __UnprocessedBuildArgs=!__args!
+  set __UnprocessedBuildArgs=%__args%
 ) else (
-  call set __UnprocessedBuildArgs=%%__args:*!processedArgs!=%%
+  set __UnprocessedBuildArgs=%__args%
+  for %%t in (!processedArgs!) do (
+    set __UnprocessedBuildArgs=!__UnprocessedBuildArgs:*%%t=!
+  )
 )
 
 :ArgsDone
@@ -294,7 +297,7 @@ if exist "%CORE_ROOT%" rd /s /q "%CORE_ROOT%"
 if exist "%CORE_ROOT_STAGE%" rd /s /q "%CORE_ROOT_STAGE%"
 md "%CORE_ROOT%"
 md "%CORE_ROOT_STAGE%"
-xcopy /s "%__BinDir%" "%CORE_ROOT_STAGE%"
+xcopy "%__BinDir%" "%CORE_ROOT_STAGE%"
 
 
 if defined __BuildAgainstPackagesArg ( 

@@ -501,6 +501,11 @@ PAL_InitializeDebug(
     void);
 
 PALIMPORT
+void
+PALAPI
+PAL_IgnoreProfileSignal(int signalNum);
+
+PALIMPORT
 HINSTANCE
 PALAPI
 PAL_RegisterModule(
@@ -2567,6 +2572,11 @@ PALIMPORT
 BOOL
 PALAPI
 PAL_GetWorkingSetSize(size_t* val);
+
+PALIMPORT
+BOOL
+PALAPI
+PAL_GetCpuLimit(UINT* val);
 
 PALIMPORT
 size_t
@@ -4987,6 +4997,14 @@ GetLogicalProcessorInformationEx(
   IN LOGICAL_PROCESSOR_RELATIONSHIP RelationshipType,
   OUT OPTIONAL PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX Buffer,
   IN OUT PDWORD ReturnedLength
+);
+
+PALIMPORT
+DWORD_PTR
+PALAPI
+SetThreadAffinityMask(
+  IN HANDLE hThread,
+  IN DWORD_PTR dwThreadAffinityMask
 );
 
 PALIMPORT

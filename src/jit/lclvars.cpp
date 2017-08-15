@@ -1477,14 +1477,13 @@ void Compiler::lvaCanPromoteStructType(CORINFO_CLASS_HANDLE    typeHnd,
 
 #if 1 // TODO-Cleanup: Consider removing this entire #if block in the future
 
-// This method has two callers. The one in Importer.cpp passes sortFields == false
-// and the other passes sortFields == true.
-// This is a workaround that leaves the inlining behavior the same as before while still
-// performing extra struct promotions when compiling the method.
+// This method has two callers. The one in Importer.cpp passes `sortFields == false` and the other passes
+// `sortFields == true`. This is a workaround that leaves the inlining behavior the same as before while still
+// performing extra struct promotion when compiling the method.
 //
-// The x86 legacy back-end can't handle the more general RyuJIT struct promotion (notably structs
-// with holes), in genPushArgList(), so in that case always check for custom layout.
-#if FEATURE_FIXED_OUT_ARGS || !defined(LEGACY_BACKEND)
+// The legacy back-end can't handle this more general struct promotion (notably structs with holes) in
+// morph/genPushArgList()/SetupLateArgs, so in that case always check for custom layout.
+#if !defined(LEGACY_BACKEND)
         if (!sortFields) // the condition "!sortFields" really means "we are inlining"
 #endif
         {
@@ -1801,9 +1800,10 @@ bool Compiler::lvaShouldPromoteStructVar(unsigned lclNum, lvaStructPromotionInfo
                 structPromotionInfo->fieldCnt, varDsc->lvFieldAccessed);
         shouldPromote = false;
     }
-#if defined(_TARGET_AMD64_) || defined(_TARGET_ARM64_)
+#if defined(_TARGET_AMD64_) || defined(_TARGET_ARM64_) || defined(_TARGET_ARM_)
     // TODO-PERF - Only do this when the LclVar is used in an argument context
     // TODO-ARM64 - HFA support should also eliminate the need for this.
+    // TODO-ARM32 - HFA support should also eliminate the need for this.
     // TODO-LSRA - Currently doesn't support the passing of floating point LCL_VARS in the integer registers
     //
     // For now we currently don't promote structs with a single float field
@@ -1817,7 +1817,7 @@ bool Compiler::lvaShouldPromoteStructVar(unsigned lclNum, lvaStructPromotionInfo
                 lclNum, structPromotionInfo->fieldCnt);
         shouldPromote = false;
     }
-#endif // _TARGET_AMD64_ || _TARGET_ARM64_
+#endif // _TARGET_AMD64_ || _TARGET_ARM64_ || _TARGET_ARM_
     else if (varDsc->lvIsParam && !lvaIsImplicitByRefLocal(lclNum))
     {
 #if FEATURE_MULTIREG_STRUCT_PROMOTE
@@ -2448,9 +2448,9 @@ void Compiler::lvaUpdateClass(unsigned varNum, CORINFO_CLASS_HANDLE clsHnd, bool
     // Are we updating the type?
     if (varDsc->lvClassHnd != clsHnd)
     {
-        JITDUMP("\nlvaUpdateClass: Updating class for V%02i from (%p) %s to (%p) %s %s\n", varNum, varDsc->lvClassHnd,
-                info.compCompHnd->getClassName(varDsc->lvClassHnd), clsHnd, info.compCompHnd->getClassName(clsHnd),
-                isExact ? " [exact]" : "");
+        JITDUMP("\nlvaUpdateClass: Updating class for V%02i from (%p) %s to (%p) %s %s\n", varNum,
+                dspPtr(varDsc->lvClassHnd), info.compCompHnd->getClassName(varDsc->lvClassHnd), dspPtr(clsHnd),
+                info.compCompHnd->getClassName(clsHnd), isExact ? " [exact]" : "");
 
         varDsc->lvClassHnd     = clsHnd;
         varDsc->lvClassIsExact = isExact;
@@ -4477,7 +4477,7 @@ unsigned Compiler::lvaGetMaxSpillTempSize()
 
 void Compiler::lvaAssignFrameOffsets(FrameLayoutState curState)
 {
-    noway_assert(lvaDoneFrameLayout < curState);
+    noway_assert((lvaDoneFrameLayout < curState) || (curState == REGALLOC_FRAME_LAYOUT));
 
     lvaDoneFrameLayout = curState;
 
@@ -5642,13 +5642,7 @@ void Compiler::lvaAssignVirtualFrameOffsetsToLocals()
 
     bool tempsAllocated = false;
 
-#ifdef _TARGET_ARM_
-    // On ARM, SP based offsets use smaller encoding. Since temps are relatively
-    // rarer than lcl usage, allocate them farther from SP.
-    if (!opts.MinOpts() && !compLocallocUsed)
-#else
     if (lvaTempsHaveLargerOffsetThanVars() && !codeGen->isFramePointerUsed())
-#endif
     {
         // Because we want the temps to have a larger offset than locals
         // and we're not using a frame pointer, we have to place the temps
@@ -6533,9 +6527,15 @@ void Compiler::lvaDumpRegLocation(unsigned lclNum)
 #ifdef _TARGET_ARM_
     else if (varDsc->TypeGet() == TYP_DOUBLE)
     {
+#ifdef LEGACY_BACKEND
+        // The assigned registers are `lvRegNum:lvOtherReg`
         printf("%3s:%-3s    ", getRegName(varDsc->lvRegNum), getRegName(varDsc->lvOtherReg));
-    }
+#else
+        // The assigned registers are `lvRegNum:RegNext(lvRegNum)`
+        printf("%3s:%-3s    ", getRegName(varDsc->lvRegNum), getRegName(REG_NEXT(varDsc->lvRegNum)));
 #endif
+    }
+#endif // !_TARGET_ARM_
     else
     {
         printf("%3s        ", getRegName(varDsc->lvRegNum));
