@@ -289,27 +289,3 @@ monitoring or diagnostics.
     * If we pick a demo with a 3rd party that is committed to implementing their side
       of the correlation standards, we can write up the demo that drives the features
       needed to make that end-to-end scenario work.  
-
-
-
-
-
-Elements of plan
-* Well Instrumented Runtime
-* Good support for Async 
-* Good support for Multi-Machine and/or MicroServices
-* Works on all platforms / Architectures
-* Monitoring costs very little, but you have the data you need
-    * This requires sampling of REQUESTS (causality flow) Event across tiers
-* Azure Functions, Service Fabric. Containers
-
-Plan
-1. EventPipe (No ETW) Works on Linux, Can do counters, all inst
-2. Good Causality Instrumentation 
-3. 
-Things I think we can improve
-* Making it easy to instrument 
-* Sampling of requests 
-* Harmonize System.Activity and EventSource concept of Activity.
-* Guidance on how to do instrumentation.
-
