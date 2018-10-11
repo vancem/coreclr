@@ -706,7 +706,6 @@ public:
 // The only requirement of this flag is that it not overlap any of the
 // side-effect flags. The actual bit used is otherwise arbitrary.
 #define GTF_IS_IN_CSE GTF_BOOLEAN
-#define GTF_PERSISTENT_SIDE_EFFECTS_IN_CSE (GTF_ASG | GTF_CALL | GTF_IS_IN_CSE)
 
 // Can any side-effects be observed externally, say by a caller method?
 // For assignments, only assignments to global memory can be observed
@@ -885,9 +884,8 @@ public:
 #define GTF_BLK_VOLATILE            GTF_IND_VOLATILE  // GT_ASG, GT_STORE_BLK, GT_STORE_OBJ, GT_STORE_DYNBLK -- is a volatile block operation
 #define GTF_BLK_UNALIGNED           GTF_IND_UNALIGNED // GT_ASG, GT_STORE_BLK, GT_STORE_OBJ, GT_STORE_DYNBLK -- is an unaligned block operation
 
-#define GTF_OVERFLOW                0x10000000 // GT_ADD, GT_SUB, GT_MUL, -- Need overflow check. Use gtOverflow(Ex)() to check this flag.
-                                               // GT_ASG_ADD, GT_ASG_SUB,
-                                               // GT_CAST
+#define GTF_OVERFLOW                0x10000000 // Supported for: GT_ADD, GT_SUB, GT_MUL and GT_CAST.
+                                               // Requires an overflow check. Use gtOverflow(Ex)() to check this flag.
 
 #define GTF_ARR_BOUND_INBND         0x80000000 // GT_ARR_BOUNDS_CHECK -- have proved this check is always in-bounds
 
@@ -2068,16 +2066,6 @@ public:
 
     // Returns "true" iff "*this" is a statement containing an assignment that defines an SSA name (lcl = phi(...));
     bool IsPhiDefnStmt();
-
-    // Can't use an assignment operator, because we need the extra "comp" argument
-    // (to provide the allocator necessary for the VarSet assignment).
-    // TODO-Cleanup: Not really needed now, w/o liveset on tree nodes
-    void CopyTo(class Compiler* comp, const GenTree& gt);
-
-    // Like the above, excepts assumes copying from small node to small node.
-    // (Following the code it replaces, it does *not* copy the GenTree fields,
-    // which CopyTo does.)
-    void CopyToSmall(const GenTree& gt);
 
     // Because of the fact that we hid the assignment operator of "BitSet" (in DEBUG),
     // we can't synthesize an assignment operator.
@@ -4259,8 +4247,7 @@ struct GenTreeIndexAddr : public GenTreeOp
             gtFlags |= GTF_INX_RNGCHK;
         }
 
-        // REVERSE_OPS is set because we must evaluate the index before the array address.
-        gtFlags |= GTF_EXCEPT | GTF_GLOB_REF | GTF_REVERSE_OPS;
+        gtFlags |= GTF_EXCEPT | GTF_GLOB_REF;
     }
 
 #if DEBUGGABLE_GENTREE
@@ -5537,22 +5524,25 @@ struct GenTreeCopyOrReload : public GenTreeUnOp
 
     unsigned GetRegCount()
     {
-        if (gtRegNum == REG_NA)
-        {
-            return 0;
-        }
 #if FEATURE_MULTIREG_RET
-        for (unsigned i = 0; i < MAX_RET_REG_COUNT - 1; ++i)
+        // We need to return the highest index for which we have a valid register.
+        // Note that the gtOtherRegs array is off by one (the 0th register is gtRegNum).
+        // If there's no valid register in gtOtherRegs, gtRegNum must be valid.
+        // Note that for most nodes, the set of valid registers must be contiguous,
+        // but for COPY or RELOAD there is only a valid register for the register positions
+        // that must be copied or reloaded.
+        //
+        for (unsigned i = MAX_RET_REG_COUNT; i > 1; i--)
         {
-            if (gtOtherRegs[i] == REG_NA)
+            if (gtOtherRegs[i - 2] != REG_NA)
             {
-                return i + 1;
+                return i;
             }
         }
-        return MAX_RET_REG_COUNT;
-#else
-        return 1;
 #endif
+        // We should never have a COPY or RELOAD with no valid registers.
+        assert(gtRegNum != REG_NA);
+        return 1;
     }
 
     GenTreeCopyOrReload(genTreeOps oper, var_types type, GenTree* op1) : GenTreeUnOp(oper, type, op1)
@@ -6025,20 +6015,39 @@ inline bool GenTree::IsMultiRegCall() const
 //
 // Return Value:
 //     Returns true if this GenTree is a multi-reg node.
+//
+// Notes:
+//     All targets that support multi-reg ops of any kind also support multi-reg return
+//     values for calls. Should that change with a future target, this method will need
+//     to change accordingly.
+//
 inline bool GenTree::IsMultiRegNode() const
 {
+#if FEATURE_MULTIREG_RET
     if (IsMultiRegCall())
     {
         return true;
     }
 
-#if !defined(_TARGET_64BIT_)
-    if (OperIsMultiRegOp() || OperIsPutArgSplit() || (gtOper == GT_COPY))
+#if FEATURE_ARG_SPLIT
+    if (OperIsPutArgSplit())
     {
         return true;
     }
 #endif
 
+#if !defined(_TARGET_64BIT_)
+    if (OperIsMultiRegOp())
+    {
+        return true;
+    }
+#endif
+
+    if (OperIs(GT_COPY, GT_RELOAD))
+    {
+        return true;
+    }
+#endif // FEATURE_MULTIREG_RET
     return false;
 }
 //-----------------------------------------------------------------------------------
@@ -6049,8 +6058,15 @@ inline bool GenTree::IsMultiRegNode() const
 //
 // Return Value:
 //     Returns the number of registers defined by this node.
+//
+// Notes:
+//     All targets that support multi-reg ops of any kind also support multi-reg return
+//     values for calls. Should that change with a future target, this method will need
+//     to change accordingly.
+//
 inline unsigned GenTree::GetMultiRegCount()
 {
+#if FEATURE_MULTIREG_RET
     if (IsMultiRegCall())
     {
         return AsCall()->GetReturnTypeDesc()->GetReturnRegCount();
@@ -6062,16 +6078,19 @@ inline unsigned GenTree::GetMultiRegCount()
         return AsPutArgSplit()->gtNumRegs;
     }
 #endif
+
 #if !defined(_TARGET_64BIT_)
     if (OperIsMultiRegOp())
     {
         return AsMultiRegOp()->GetRegCount();
     }
+#endif
+
     if (OperIs(GT_COPY, GT_RELOAD))
     {
         return AsCopyOrReload()->GetRegCount();
     }
-#endif
+#endif // FEATURE_MULTIREG_RET
     assert(!"GetMultiRegCount called with non-multireg node");
     return 1;
 }
@@ -6086,12 +6105,20 @@ inline unsigned GenTree::GetMultiRegCount()
 // Return Value:
 //     The register, if any, assigned to this index for this node.
 //
+// Notes:
+//     All targets that support multi-reg ops of any kind also support multi-reg return
+//     values for calls. Should that change with a future target, this method will need
+//     to change accordingly.
+//
 inline regNumber GenTree::GetRegByIndex(int regIndex)
 {
     if (regIndex == 0)
     {
         return gtRegNum;
     }
+
+#if FEATURE_MULTIREG_RET
+
     if (IsMultiRegCall())
     {
         return AsCall()->GetRegNumByIdx(regIndex);
@@ -6108,11 +6135,14 @@ inline regNumber GenTree::GetRegByIndex(int regIndex)
     {
         return AsMultiRegOp()->GetRegNumByIdx(regIndex);
     }
+#endif
+
     if (OperIs(GT_COPY, GT_RELOAD))
     {
         return AsCopyOrReload()->GetRegNumByIdx(regIndex);
     }
-#endif
+#endif // FEATURE_MULTIREG_RET
+
     assert(!"Invalid regIndex for GetRegFromMultiRegNode");
     return REG_NA;
 }
@@ -6131,8 +6161,13 @@ inline regNumber GenTree::GetRegByIndex(int regIndex)
 //     This must be a multireg node that is *not* a copy or reload (which must retrieve the
 //     type from its source), and 'regIndex' must be a valid index for this node.
 //
+//     All targets that support multi-reg ops of any kind also support multi-reg return
+//     values for calls. Should that change with a future target, this method will need
+//     to change accordingly.
+//
 inline var_types GenTree::GetRegTypeByIndex(int regIndex)
 {
+#if FEATURE_MULTIREG_RET
     if (IsMultiRegCall())
     {
         return AsCall()->AsCall()->GetReturnTypeDesc()->GetReturnRegType(regIndex);
@@ -6150,6 +6185,8 @@ inline var_types GenTree::GetRegTypeByIndex(int regIndex)
         return AsMultiRegOp()->GetRegType(regIndex);
     }
 #endif
+
+#endif // FEATURE_MULTIREG_RET
     assert(!"Invalid node type for GetRegTypeByIndex");
     return TYP_UNDEF;
 }

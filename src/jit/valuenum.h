@@ -47,10 +47,28 @@ enum VNFunc
     VNF_COUNT
 };
 
+enum VNOperKind
+{
+    VOK_Default,
+    VOK_Unsigned,
+    VOK_OverflowCheck,
+    VOK_Unsigned_OverflowCheck
+};
+
+// Given the bool values isUnsigned and overflowCheck return the proper VNOperKInd enum
+//
+VNOperKind VNGetOperKind(bool isUnsigned, bool overflowCheck);
+
 // Given an "oper" and associated flags with it, transform the oper into a
-// more accurate oper that can be used in evaluation. For example, (GT_ADD, unsigned)
-// transforms to GT_ADD_UN.
-VNFunc GetVNFuncForOper(genTreeOps oper, bool isUnsigned);
+// more accurate oper that can be used in evaluation.
+// For example, (GT_ADD, true, false) transforms to GT_ADD_UN
+// and (GT_ADD, false, true) transforms to GT_ADD_OVF
+//
+VNFunc GetVNFuncForOper(genTreeOps oper, VNOperKind operKind);
+
+// Given a GenTree node return the VNFunc that shodul be used when value numbering
+//
+VNFunc GetVNFuncForNode(GenTree* node);
 
 // An instance of this struct represents an application of the function symbol
 // "m_func" to the first "m_arity" (<= 4) argument values in "m_args."
@@ -172,6 +190,9 @@ private:
     // Returns "true" iff "vnf" can be evaluated for constant arguments.
     static bool CanEvalForConstantArgs(VNFunc vnf);
 
+    // Returns "true" iff "vnf" should be folded by evaluating the func with constant arguments.
+    bool VNEvalShouldFold(var_types typ, VNFunc func, ValueNum arg0VN, ValueNum arg1VN);
+
     // return vnf(v0)
     template <typename T>
     static T EvalOp(VNFunc vnf, T v0);
@@ -179,13 +200,12 @@ private:
     // returns vnf(v0)  for int/INT32
     int EvalOpInt(VNFunc vnf, int v0);
 
-    // If vnf(v0, v1) would raise an exception, sets *pExcSet to the singleton set containing the exception, and
-    // returns (T)0. Otherwise, returns vnf(v0, v1).
+    // returns vnf(v0, v1).
     template <typename T>
-    T EvalOp(VNFunc vnf, T v0, T v1, ValueNum* pExcSet);
+    T EvalOp(VNFunc vnf, T v0, T v1);
 
     // returns vnf(v0, v1)  for int/INT32
-    int EvalOpInt(VNFunc vnf, int v0, int v1, ValueNum* pExcSet);
+    int EvalOpInt(VNFunc vnf, int v0, int v1);
 
     // return vnf(v0) or vnf(v0, v1), respectively (must, of course be unary/binary ops, respectively.)
     template <typename T>
@@ -222,6 +242,8 @@ private:
     ValueNum EvalFuncForConstantArgs(var_types typ, VNFunc vnf, ValueNum vn0, ValueNum vn1);
     ValueNum EvalFuncForConstantFPArgs(var_types typ, VNFunc vnf, ValueNum vn0, ValueNum vn1);
     ValueNum EvalCastForConstantArgs(var_types typ, VNFunc vnf, ValueNum vn0, ValueNum vn1);
+
+    ValueNum EvalUsingMathIdentity(var_types typ, VNFunc vnf, ValueNum vn0, ValueNum vn1);
 
 // This is the constant value used for the default value of m_mapSelectBudget
 #define DEFAULT_MAP_SELECT_BUDGET 100 // used by JitVNMapSelBudget
@@ -341,16 +363,37 @@ public:
     // It returns NoVN for a "typ" that has no one value, such as TYP_REF.
     ValueNum VNOneForType(var_types typ);
 
-    // Return the value number representing the singleton exception set containing the exception value "x".
+    // Returns the value number for negative one of the given "typ".
+    // It returns NoVN for a "typ" that has no negative one value, such as TYP_REF, or TYP_UINT
+    ValueNum VNNegOneForType(var_types typ);
+
+    // Create or return the existimg value number representing a singleton exception set
+    // for the the exception value "x".
     ValueNum VNExcSetSingleton(ValueNum x);
     ValueNumPair VNPExcSetSingleton(ValueNumPair x);
 
+    // Returns true if the current pair of items are in ascending order and they are not duplicates.
+    // Used to verify that exception sets are in ascending order when processing them.
+    bool VNCheckAscending(ValueNum item, ValueNum xs1);
+
     // Returns the VN representing the union of the two exception sets "xs0" and "xs1".
     // These must be VNForEmtpyExcSet() or applications of VNF_ExcSetCons, obeying
-    // the ascending order invariant (which is preserved in the result.)
-    ValueNum VNExcSetUnion(ValueNum xs0, ValueNum xs1 DEBUGARG(bool topLevel = true));
+    // the ascending order invariant. (which is preserved in the result)
+    ValueNum VNExcSetUnion(ValueNum xs0, ValueNum xs1);
 
     ValueNumPair VNPExcSetUnion(ValueNumPair xs0vnp, ValueNumPair xs1vnp);
+
+    // Returns the VN representing the intersection of the two exception sets "xs0" and "xs1".
+    // These must be applications of VNF_ExcSetCons or the empty set. (i.e VNForEmptyExcSet())
+    // and also must be in ascending order.
+    ValueNum VNExcSetIntersection(ValueNum xs0, ValueNum xs1);
+
+    ValueNumPair VNPExcSetIntersection(ValueNumPair xs0vnp, ValueNumPair xs1vnp);
+
+    // Returns true if every exeception singleton in the vnCandidateSet is also present
+    // in the vnFullSet.
+    // Both arguments must be either VNForEmptyExcSet() or applications of VNF_ExcSetCons.
+    bool VNExcIsSubset(ValueNum vnFullSet, ValueNum vnCandidateSet);
 
     // Returns "true" iff "vn" is an application of "VNF_ValWithExc".
     bool VNHasExc(ValueNum vn)
@@ -359,28 +402,54 @@ public:
         return GetVNFunc(vn, &funcApp) && funcApp.m_func == VNF_ValWithExc;
     }
 
-    // Requires that "vn" is *not* a "VNF_ValWithExc" appliation.
-    // If vn "excSet" is not "VNForEmptyExcSet()", return "VNF_ValWithExc(vn, excSet)".  Otherwise,
-    // just return "vn".
+    // If vn "excSet" is "VNForEmptyExcSet()" we just return "vn"
+    // otherwise we use VNExcSetUnion to combine the exception sets of both "vn" and "excSet"
+    // and return that ValueNum
     ValueNum VNWithExc(ValueNum vn, ValueNum excSet);
 
     ValueNumPair VNPWithExc(ValueNumPair vnp, ValueNumPair excSetVNP);
 
-    // If "vnWx" is a "VNF_ValWithExc(normal, excSet)" application, sets "*pvn" to "normal", and
-    // "*pvnx" to "excSet".  Otherwise, just sets "*pvn" to "normal".
+    // If "vnWx" is a "VNF_ValWithExc(normal, excSet)" value, this sets "*pvn" to the Normal value
+    // and sets "*pvnx" to Exception set value.  Otherwise, this just sets "*pvn" to to the Normal value.
+    // "pvnx" represents the set of all exceptions that can happen for the expression
     void VNUnpackExc(ValueNum vnWx, ValueNum* pvn, ValueNum* pvnx);
 
     void VNPUnpackExc(ValueNumPair vnWx, ValueNumPair* pvn, ValueNumPair* pvnx);
 
     // If "vn" is a "VNF_ValWithExc(norm, excSet)" value, returns the "norm" argument; otherwise,
     // just returns "vn".
-    ValueNum VNNormVal(ValueNum vn);
-    ValueNumPair VNPNormVal(ValueNumPair vn);
+    // The Normal value is the value number of the expression when no exceptions occurred
+    ValueNum VNNormalValue(ValueNum vn);
+
+    // Given a "vnp", get the ValueNum kind based upon vnk,
+    // then call VNNormalValue on that ValueNum
+    // The Normal value is the value number of the expression when no exceptions occurred
+    ValueNum VNNormalValue(ValueNumPair vnp, ValueNumKind vnk);
+
+    // Given a "vnp", get the NormalValuew for the VNK_Liberal part of that ValueNum
+    // The Normal value is the value number of the expression when no exceptions occurred
+    inline ValueNum VNLiberalNormalValue(ValueNumPair vnp)
+    {
+        return VNNormalValue(vnp, VNK_Liberal);
+    }
+
+    // Given a "vnp", get the NormalValuew for the VNK_Conservative part of that ValueNum
+    // The Normal value is the value number of the expression when no exceptions occurred
+    inline ValueNum VNConservativeNormalValue(ValueNumPair vnp)
+    {
+        return VNNormalValue(vnp, VNK_Conservative);
+    }
+
+    // Given a "vnp", get the Normal values for both the liberal and conservative parts of "vnp"
+    // The Normal value is the value number of the expression when no exceptions occurred
+    ValueNumPair VNPNormalPair(ValueNumPair vnp);
 
     // If "vn" is a "VNF_ValWithExc(norm, excSet)" value, returns the "excSet" argument; otherwise,
-    // just returns "EmptyExcSet()".
-    ValueNum VNExcVal(ValueNum vn);
-    ValueNumPair VNPExcVal(ValueNumPair vn);
+    // we return a special Value Number representing the empty exception set.
+    // The exeception set value is the value number of the set of possible exceptions.
+    ValueNum VNExceptionSet(ValueNum vn);
+
+    ValueNumPair VNPExceptionSet(ValueNumPair vn);
 
     // True "iff" vn is a value known to be non-null.  (For example, the result of an allocation...)
     bool IsKnownNonNull(ValueNum vn);
@@ -388,15 +457,14 @@ public:
     // True "iff" vn is a value returned by a call to a shared static helper.
     bool IsSharedStatic(ValueNum vn);
 
-    // VN's for functions of other values.
-    // Four overloads, for arities 0, 1, 2, and 3.  If we need other arities, we'll consider it.
+    // VNForFunc: We have five overloads, for arities 0, 1, 2, 3 and 4
     ValueNum VNForFunc(var_types typ, VNFunc func);
     ValueNum VNForFunc(var_types typ, VNFunc func, ValueNum opVNwx);
     // This must not be used for VNF_MapSelect applications; instead use VNForMapSelect, below.
     ValueNum VNForFunc(var_types typ, VNFunc func, ValueNum op1VNwx, ValueNum op2VNwx);
     ValueNum VNForFunc(var_types typ, VNFunc func, ValueNum op1VNwx, ValueNum op2VNwx, ValueNum op3VNwx);
 
-    // The following four op VNForFunc is only used for VNF_PtrToArrElem, elemTypeEqVN, arrVN, inxVN, fldSeqVN
+    // The following four-op VNForFunc is used for VNF_PtrToArrElem, elemTypeEqVN, arrVN, inxVN, fldSeqVN
     ValueNum VNForFunc(
         var_types typ, VNFunc func, ValueNum op1VNwx, ValueNum op2VNwx, ValueNum op3VNwx, ValueNum op4VNwx);
 
@@ -1400,7 +1468,10 @@ inline bool ValueNumStore::VNFuncIsComparison(VNFunc vnf)
 {
     if (vnf >= VNF_Boundary)
     {
-        return false;
+        // For integer types we have unsigned comparisions, and
+        // for floating point types these are the unordered variants.
+        //
+        return ((vnf == VNF_LT_UN) || (vnf == VNF_LE_UN) || (vnf == VNF_GE_UN) || (vnf == VNF_GT_UN));
     }
     genTreeOps gtOp = genTreeOps(vnf);
     return GenTree::OperIsCompare(gtOp) != 0;

@@ -1540,7 +1540,7 @@ void CodeGen::genCodeForMulHi(GenTreeOp* treeNode)
 
 // Generate code for ADD, SUB, MUL, DIV, UDIV, AND, OR and XOR
 // This method is expected to have called genConsumeOperands() before calling it.
-void CodeGen::genCodeForBinary(GenTree* treeNode)
+void CodeGen::genCodeForBinary(GenTreeOp* treeNode)
 {
     const genTreeOps oper       = treeNode->OperGet();
     regNumber        targetReg  = treeNode->gtRegNum;
@@ -4601,8 +4601,28 @@ void CodeGen::genSIMDIntrinsicGetItem(GenTreeSIMD* simdNode)
                 assert(op1->isUsedFromReg());
                 regNumber srcReg = op1->gtRegNum;
 
-                // mov targetReg, srcReg[#index]
-                getEmitter()->emitIns_R_R_I(INS_mov, baseTypeSize, targetReg, srcReg, index);
+                instruction ins;
+                if (varTypeIsFloating(baseType))
+                {
+                    assert(genIsValidFloatReg(targetReg));
+                    // dup targetReg, srcReg[#index]
+                    ins = INS_dup;
+                }
+                else
+                {
+                    assert(genIsValidIntReg(targetReg));
+                    if (varTypeIsUnsigned(baseType) || (baseTypeSize == EA_8BYTE))
+                    {
+                        // umov targetReg, srcReg[#index]
+                        ins = INS_umov;
+                    }
+                    else
+                    {
+                        // smov targetReg, srcReg[#index]
+                        ins = INS_smov;
+                    }
+                }
+                getEmitter()->emitIns_R_R_I(ins, baseTypeSize, targetReg, srcReg, index);
             }
         }
     }

@@ -13653,6 +13653,10 @@ DONE_MORPHING_CHILDREN:
                     GenTree* throwNode = op1->gtOp.gtOp1;
                     noway_assert(throwNode->gtType == TYP_VOID);
 
+                    JITDUMP("Removing [%06d] GT_JTRUE as the block now unconditionally throws an exception.\n",
+                            dspTreeID(tree));
+                    DEBUG_DESTROY_NODE(tree);
+
                     return throwNode;
                 }
 
@@ -13662,13 +13666,17 @@ DONE_MORPHING_CHILDREN:
                 // We need to keep op1 for the side-effects. Hang it off
                 // a GT_COMMA node
 
+                JITDUMP("Keeping side-effects by bashing [%06d] GT_JTRUE into a GT_COMMA.\n", dspTreeID(tree));
+
                 tree->ChangeOper(GT_COMMA);
                 tree->gtOp.gtOp2 = op2 = gtNewNothingNode();
 
                 // Additionally since we're eliminating the JTRUE
                 // codegen won't like it if op1 is a RELOP of longs, floats or doubles.
                 // So we change it into a GT_COMMA as well.
+                JITDUMP("Also bashing [%06d] (a relop) into a GT_COMMA.\n", dspTreeID(op1));
                 op1->ChangeOper(GT_COMMA);
+                op1->gtFlags &= ~GTF_UNSIGNED; // Clear the unsigned flag if it was set on the relop
                 op1->gtType = op1->gtOp.gtOp1->gtType;
 
                 return tree;
@@ -17031,7 +17039,7 @@ void Compiler::fgPromoteStructs()
     // Loop through the original lvaTable. Looking for struct locals to be promoted.
     //
     lvaStructPromotionInfo structPromotionInfo;
-    bool                   tooManyLocals = false;
+    bool                   tooManyLocalsReported = false;
 
     for (unsigned lclNum = 0; lclNum < startLvaCount; lclNum++)
     {
@@ -17049,54 +17057,16 @@ void Compiler::fgPromoteStructs()
         else if (lvaHaveManyLocals())
         {
             // Print the message first time when we detected this condition
-            if (!tooManyLocals)
+            if (!tooManyLocalsReported)
             {
                 JITDUMP("Stopped promoting struct fields, due to too many locals.\n");
             }
-            tooManyLocals = true;
+            tooManyLocalsReported = true;
         }
         else if (varTypeIsStruct(varDsc))
         {
-            bool shouldPromote;
-
-            lvaCanPromoteStructVar(lclNum, &structPromotionInfo);
-            if (structPromotionInfo.canPromote)
-            {
-                shouldPromote = lvaShouldPromoteStructVar(lclNum, &structPromotionInfo);
-            }
-            else
-            {
-                shouldPromote = false;
-            }
-
-#if 0
-            // Often-useful debugging code: if you've narrowed down a struct-promotion problem to a single
-            // method, this allows you to select a subset of the vars to promote (by 1-based ordinal number).
-            static int structPromoVarNum = 0;
-            structPromoVarNum++;
-            if (atoi(getenv("structpromovarnumlo")) <= structPromoVarNum && structPromoVarNum <= atoi(getenv("structpromovarnumhi")))
-#endif // 0
-
-            if (shouldPromote)
-            {
-                // Promote the this struct local var.
-                lvaPromoteStructVar(lclNum, &structPromotionInfo);
-                promotedVar = true;
-
-#ifdef _TARGET_ARM_
-                if (structPromotionInfo.requiresScratchVar)
-                {
-                    // Ensure that the scratch variable is allocated, in case we
-                    // pass a promoted struct as an argument.
-                    if (lvaPromotedStructAssemblyScratchVar == BAD_VAR_NUM)
-                    {
-                        lvaPromotedStructAssemblyScratchVar =
-                            lvaGrabTempWithImplicitUse(false DEBUGARG("promoted struct assembly scratch var."));
-                        lvaTable[lvaPromotedStructAssemblyScratchVar].lvType = TYP_I_IMPL;
-                    }
-                }
-#endif // _TARGET_ARM_
-            }
+            assert(structPromotionHelper != nullptr);
+            promotedVar = structPromotionHelper->TryPromoteStructVar(lclNum);
         }
 
         if (!promotedVar && varDsc->lvIsSIMDType() && !varDsc->lvFieldAccessed)
@@ -17106,6 +17076,20 @@ void Compiler::fgPromoteStructs()
             varDsc->lvRegStruct = true;
         }
     }
+
+#ifdef _TARGET_ARM_
+    if (structPromotionHelper->GetRequiresScratchVar())
+    {
+        // Ensure that the scratch variable is allocated, in case we
+        // pass a promoted struct as an argument.
+        if (lvaPromotedStructAssemblyScratchVar == BAD_VAR_NUM)
+        {
+            lvaPromotedStructAssemblyScratchVar =
+                lvaGrabTempWithImplicitUse(false DEBUGARG("promoted struct assembly scratch var."));
+            lvaTable[lvaPromotedStructAssemblyScratchVar].lvType = TYP_I_IMPL;
+        }
+    }
+#endif // _TARGET_ARM_
 
 #ifdef DEBUG
     if (verbose)
@@ -17120,43 +17104,74 @@ void Compiler::fgMorphStructField(GenTree* tree, GenTree* parent)
 {
     noway_assert(tree->OperGet() == GT_FIELD);
 
-    GenTree* objRef = tree->gtField.gtFldObj;
-    GenTree* obj    = ((objRef != nullptr) && (objRef->gtOper == GT_ADDR)) ? objRef->gtOp.gtOp1 : nullptr;
+    GenTreeField* field  = tree->AsField();
+    GenTree*      objRef = field->gtFldObj;
+    GenTree*      obj    = ((objRef != nullptr) && (objRef->gtOper == GT_ADDR)) ? objRef->gtOp.gtOp1 : nullptr;
     noway_assert((tree->gtFlags & GTF_GLOB_REF) || ((obj != nullptr) && (obj->gtOper == GT_LCL_VAR)));
 
     /* Is this an instance data member? */
 
     if ((obj != nullptr) && (obj->gtOper == GT_LCL_VAR))
     {
-        unsigned   lclNum = obj->gtLclVarCommon.gtLclNum;
-        LclVarDsc* varDsc = &lvaTable[lclNum];
+        unsigned         lclNum = obj->gtLclVarCommon.gtLclNum;
+        const LclVarDsc* varDsc = &lvaTable[lclNum];
 
         if (varTypeIsStruct(obj))
         {
             if (varDsc->lvPromoted)
             {
                 // Promoted struct
-                unsigned fldOffset     = tree->gtField.gtFldOffset;
+                unsigned fldOffset     = field->gtFldOffset;
                 unsigned fieldLclIndex = lvaGetFieldLocal(varDsc, fldOffset);
-                noway_assert(fieldLclIndex != BAD_VAR_NUM);
 
-                if (lvaIsImplicitByRefLocal(lclNum))
+                if (fieldLclIndex == BAD_VAR_NUM)
                 {
-                    // Keep track of the number of appearances of each promoted implicit
-                    // byref (here during struct promotion, which happens during address-exposed
-                    // analysis); fgMakeOutgoingStructArgCopy checks the ref counts for implicit
-                    // byref params when deciding if it's legal to elide certain copies of them.
-                    // This should probably be moved LocalAddressVisitor, which does this already
-                    // for GT_LCL_VAR nodes it encounters.
-                    JITDUMP(
-                        "Incrementing ref count from %d to %d for V%02d in fgMorphStructField for promoted struct\n",
-                        varDsc->lvRefCnt(RCS_EARLY), varDsc->lvRefCnt(RCS_EARLY) + 1, lclNum);
-                    varDsc->incLvRefCnt(1, RCS_EARLY);
+                    // Access a promoted struct's field with an offset that doesn't correspond to any field.
+                    // It can happen if the struct was cast to another struct with different offsets.
+                    return;
+                }
+
+                const LclVarDsc* fieldDsc  = &lvaTable[fieldLclIndex];
+                var_types        fieldType = fieldDsc->TypeGet();
+
+                assert(fieldType != TYP_STRUCT); // promoted LCL_VAR can't have a struct type.
+                if (tree->TypeGet() != fieldType)
+                {
+                    if (tree->TypeGet() != TYP_STRUCT)
+                    {
+                        // This is going to be an incorrect instruction promotion.
+                        // For example when we try to read int as long.
+                        return;
+                    }
+
+                    if (field->gtFldHnd != fieldDsc->lvFieldHnd)
+                    {
+                        CORINFO_CLASS_HANDLE fieldTreeClass = nullptr, fieldDscClass = nullptr;
+
+                        CorInfoType fieldTreeType = info.compCompHnd->getFieldType(field->gtFldHnd, &fieldTreeClass);
+                        CorInfoType fieldDscType = info.compCompHnd->getFieldType(fieldDsc->lvFieldHnd, &fieldDscClass);
+                        if (fieldTreeType != fieldDscType || fieldTreeClass != fieldDscClass)
+                        {
+                            // Access the promoted field with a different class handle, can't check that types match.
+                            return;
+                        }
+                        // Access the promoted field as a field of a non-promoted struct with the same class handle.
+                    }
+#ifdef DEBUG
+                    else if (tree->TypeGet() == TYP_STRUCT)
+                    {
+                        // The field tree accesses it as a struct, but the promoted lcl var for the field
+                        // says that it has another type. It can happen only if struct promotion faked
+                        // field type for a struct of single field of scalar type aligned at their natural boundary.
+                        assert(structPromotionHelper != nullptr);
+                        structPromotionHelper->CheckRetypedAsScalar(field->gtFldHnd, fieldType);
+                    }
+#endif // DEBUG
                 }
 
                 tree->SetOper(GT_LCL_VAR);
                 tree->gtLclVarCommon.SetLclNum(fieldLclIndex);
-                tree->gtType = lvaTable[fieldLclIndex].TypeGet();
+                tree->gtType = fieldType;
                 tree->gtFlags &= GTF_NODE_MASK;
                 tree->gtFlags &= ~GTF_GLOB_REF;
 
@@ -17179,7 +17194,7 @@ void Compiler::fgMorphStructField(GenTree* tree, GenTree* parent)
                     // constant, then it is interpreted as init-block incorrectly.
                     //
                     // TODO - This can also be avoided if we implement recursive struct
-                    // promotion.
+                    // promotion, tracked by #10019.
                     if (varTypeIsStruct(parent) && parent->gtOp.gtOp2 == tree && !varTypeIsStruct(tree))
                     {
                         tree->gtFlags |= GTF_DONT_CSE;
@@ -17228,19 +17243,6 @@ void Compiler::fgMorphStructField(GenTree* tree, GenTree* parent)
 
             if (tree->TypeGet() == obj->TypeGet())
             {
-                if (lvaIsImplicitByRefLocal(lclNum))
-                {
-                    // Keep track of the number of appearances of each promoted implicit
-                    // byref (here during struct promotion, which happens during address-exposed
-                    // analysis); fgMakeOutgoingStructArgCopy checks the ref counts for implicit
-                    // byref params when deciding if it's legal to elide certain copies of them.
-                    // This should probably be moved LocalAddressVisitor, which does this already
-                    // for GT_LCL_VAR nodes it encounters.
-                    JITDUMP("Incrementing ref count from %d to %d for V%02d in fgMorphStructField for normed struct\n",
-                            varDsc->lvRefCnt(RCS_EARLY), varDsc->lvRefCnt(RCS_EARLY) + 1, lclNum);
-                    varDsc->incLvRefCnt(1, RCS_EARLY);
-                }
-
                 tree->ChangeOper(GT_LCL_VAR);
                 tree->gtLclVarCommon.SetLclNum(lclNum);
                 tree->gtFlags &= GTF_NODE_MASK;
@@ -18145,7 +18147,12 @@ public:
         {
             MorphStructField(node, user);
         }
-        else if (node->OperIs(GT_LCL_VAR, GT_LCL_FLD))
+        else if (node->OperIs(GT_LCL_FLD))
+        {
+            MorphLocalField(node, user);
+        }
+
+        if (node->OperIsLocal())
         {
             unsigned lclNum = node->AsLclVarCommon()->GetLclNum();
 
@@ -18159,11 +18166,6 @@ public:
                 JITDUMP("LocalAddressVisitor incrementing ref count from %d to %d for V%02d\n",
                         varDsc->lvRefCnt(RCS_EARLY), varDsc->lvRefCnt(RCS_EARLY) + 1, lclNum);
                 varDsc->incLvRefCnt(1, RCS_EARLY);
-            }
-
-            if (node->OperIs(GT_LCL_FLD))
-            {
-                MorphLocalField(node, user);
             }
         }
 

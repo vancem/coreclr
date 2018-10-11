@@ -713,6 +713,18 @@ static bool IsInSameVersionBubble(MethodDesc* pCurMD, MethodDesc *pTargetMD)
 
 #endif // FEATURE_READYTORUN_COMPILER
 
+static bool CallerAndCalleeInSystemVersionBubble(MethodDesc* pCaller, MethodDesc* pCallee)
+{
+    LIMITED_METHOD_CONTRACT;
+
+#ifdef FEATURE_READYTORUN_COMPILER
+    if (IsReadyToRunCompilation())
+        return pCallee->GetModule()->IsSystem() && IsInSameVersionBubble(pCaller, pCallee);
+#endif
+
+    return false;
+}
+
 
 /*********************************************************************/
 CorInfoCanSkipVerificationResult CEEInfo::canSkipVerification(
@@ -1549,13 +1561,6 @@ void CEEInfo::getFieldInfo (CORINFO_RESOLVED_TOKEN * pResolvedToken,
                 fieldFlags |= CORINFO_FLG_FIELD_INITCLASS;
         }
         else
-        if (pField->IsContextStatic())
-        {
-            fieldAccessor = CORINFO_FIELD_STATIC_ADDR_HELPER;
-
-            pResult->helper = CORINFO_HELP_GETSTATICFIELDADDR_CONTEXT;
-        }
-        else
         {
             // Regular or thread static
             CORINFO_FIELD_ACCESSOR intrinsicAccessor;
@@ -1607,7 +1612,6 @@ void CEEInfo::getFieldInfo (CORINFO_RESOLVED_TOKEN * pResolvedToken,
         //
         if ((flags & CORINFO_ACCESS_ADDRESS) &&
             !pField->IsThreadStatic() &&
-            !pField->IsContextStatic() &&
             (fieldAccessor != CORINFO_FIELD_STATIC_TLS))
         {
             fieldFlags |= CORINFO_FLG_FIELD_SAFESTATIC_BYREF_RETURN;
@@ -5158,8 +5162,6 @@ void CEEInfo::getCallInfo(
         EX_THROW(EEMessageException, (kMissingMethodException, IDS_EE_MISSING_METHOD, W("?")));
     }
 
-
-
     TypeHandle exactType = TypeHandle(pResolvedToken->hClass);
 
     TypeHandle constrainedType;
@@ -5371,23 +5373,14 @@ void CEEInfo::getCallInfo(
 
         if (devirt)
         {
-            // We can't allow generic remotable methods to be considered resolved, it leads to a non-instantiating method desc being
-            // passed to the remoting stub. The easiest way to deal with these is to force them through the virtual code path.
-            // It is actually good to do this deoptimization for all remotable methods since remoting interception via vtable dispatch 
-            // is faster then remoting interception via thunk
-            if (!pTargetMD->IsRemotingInterceptedViaVirtualDispatch() /* || !pTargetMD->HasMethodInstantiation() */)
-            {
-                resolvedCallVirt = true;
-                directCall = true;
-            }
+            resolvedCallVirt = true;
+            directCall = true;
         }
     }
 
     if (directCall)
     {
-        bool allowInstParam = (flags & CORINFO_CALLINFO_ALLOWINSTPARAM)
-            // See code:IsRemotingInterceptedViaPrestub on why we need need to disallow inst param for remoting.
-            && !( pTargetMD->MayBeRemotingIntercepted() && !pTargetMD->IsVtableMethod() );
+        bool allowInstParam = (flags & CORINFO_CALLINFO_ALLOWINSTPARAM);
 
         // Create instantiating stub if necesary
         if (!allowInstParam && pTargetMD->RequiresInstArg())
@@ -5459,8 +5452,11 @@ void CEEInfo::getCallInfo(
         pResult->kind = CORINFO_VIRTUALCALL_LDVIRTFTN;  // stub dispatch can't handle generic method calls yet
         pResult->nullInstanceCheck = TRUE;
     }
-    // Non-interface dispatches go through the vtable
-    else if (!pTargetMD->IsInterface() && !IsReadyToRunCompilation())
+    // Non-interface dispatches go through the vtable.
+    // We'll special virtual calls to target methods in the corelib assembly when compiling in R2R mode and generate fragile-NI-like callsites for improved performance. We
+    // can do that because today we'll always service the corelib assembly and the runtime in one bundle. Any caller in the corelib version bubble can benefit from this
+    // performance optimization.
+    else if (!pTargetMD->IsInterface() && (!IsReadyToRunCompilation() || CallerAndCalleeInSystemVersionBubble((MethodDesc*)callerHandle, pTargetMD)))
     {
         pResult->kind = CORINFO_VIRTUALCALL_VTABLE;
         pResult->nullInstanceCheck = TRUE;
@@ -5725,7 +5721,9 @@ void CEEInfo::getCallInfo(
     pResult->classFlags = getClassAttribsInternal(pResolvedToken->hClass);
 
     pResult->methodFlags = getMethodAttribsInternal(pResult->hMethod);
-    getMethodSigInternal(pResult->hMethod, &pResult->sig, (pResult->hMethod == pResolvedToken->hMethod) ? pResolvedToken->hClass : NULL, /* isCallSite = */ TRUE);
+
+    SignatureKind signatureKind = flags & CORINFO_CALLINFO_CALLVIRT ? SK_VIRTUAL_CALLSITE : SK_CALLSITE;
+    getMethodSigInternal(pResult->hMethod, &pResult->sig, (pResult->hMethod == pResolvedToken->hMethod) ? pResolvedToken->hClass : NULL, signatureKind);
 
     if (flags & CORINFO_CALLINFO_VERIFICATION)
     {
@@ -6763,6 +6761,17 @@ DWORD CEEInfo::getMethodAttribsInternal (CORINFO_METHOD_HANDLE ftn)
         result |= CORINFO_FLG_DONT_INLINE_CALLER;
     }
 
+    // Check for the aggressive optimization directive. AggressiveOptimization only makes sense for IL methods.
+    DWORD ilMethodImplAttribs = 0;
+    if (pMD->IsIL())
+    {
+        ilMethodImplAttribs = pMD->GetImplAttrs();
+        if (IsMiAggressiveOptimization(ilMethodImplAttribs))
+        {
+            result |= CORINFO_FLG_AGGRESSIVE_OPT;
+        }
+    }
+
     // Check for an inlining directive.
     if (pMD->IsNotInline())
     {
@@ -6770,7 +6779,7 @@ DWORD CEEInfo::getMethodAttribsInternal (CORINFO_METHOD_HANDLE ftn)
         result |= CORINFO_FLG_DONT_INLINE;
     }
     // AggressiveInlining only makes sense for IL methods.
-    else if (pMD->IsIL() && IsMiAggressiveInlining(pMD->GetImplAttrs()))
+    else if (pMD->IsIL() && IsMiAggressiveInlining(ilMethodImplAttribs))
     {
         result |= CORINFO_FLG_FORCEINLINE;
     }
@@ -7857,12 +7866,6 @@ CorInfoInline CEEInfo::canInline (CORINFO_METHOD_HANDLE hCaller,
         {
             dwRestrictions |= INLINE_NO_CALLEE_LDSTR;
         }
-
-        // The remoting interception can be skipped only if the call is on same this pointer
-        if (pCallee->MayBeRemotingIntercepted())
-        {
-            dwRestrictions |= INLINE_SAME_THIS;
-        }
     }
 
 #ifdef PROFILING_SUPPORTED
@@ -8494,7 +8497,7 @@ CEEInfo::getMethodSigInternal(
     CORINFO_METHOD_HANDLE ftnHnd, 
     CORINFO_SIG_INFO *    sigRet, 
     CORINFO_CLASS_HANDLE  owner,
-    BOOL isCallSite)
+    SignatureKind signatureKind)
 {
     STANDARD_VM_CONTRACT;
 
@@ -8521,13 +8524,16 @@ CEEInfo::getMethodSigInternal(
     if (ftn->RequiresInstArg())
     {
         //
-        // If we are making an interface call that is a default interface method, we need to lie to the JIT.  
+        // If we are making a virtual call to an instance method on an interface, we need to lie to the JIT.  
         // The reason being that we already made sure target is always directly callable (through instantiation stubs), 
         // JIT should not generate shared generics aware call code and insert the secret argument again at the callsite.
         // Otherwise we would end up with two secret generic dictionary arguments (since the stub also provides one).
         //
-        BOOL isDefaultInterfaceMethodCallSite = isCallSite && ftn->IsDefaultInterfaceMethod();
-        if (!isDefaultInterfaceMethodCallSite)
+        BOOL isCallSiteThatGoesThroughInstantiatingStub =
+            signatureKind == SK_VIRTUAL_CALLSITE &&
+            !ftn->IsStatic() &&
+            ftn->GetMethodTable()->IsInterface();
+        if (!isCallSiteThatGoesThroughInstantiatingStub)
             sigRet->callConv = (CorInfoCallConv) (sigRet->callConv | CORINFO_CALLCONV_PARAMTYPE);
     }
 
@@ -8755,8 +8761,8 @@ void CEEInfo::getMethodVTableOffset (CORINFO_METHOD_HANDLE methodHnd,
     // better be in the vtable
     _ASSERTE(method->GetSlot() < method->GetMethodTable()->GetNumVirtuals());
 
-    *pOffsetOfIndirection = MethodTable::GetVtableOffset() + MethodTable::GetIndexOfVtableIndirection(method->GetSlot()) * sizeof(MethodTable::VTableIndir_t);
-    *pOffsetAfterIndirection = MethodTable::GetIndexAfterVtableIndirection(method->GetSlot()) * sizeof(MethodTable::VTableIndir2_t);
+    *pOffsetOfIndirection = MethodTable::GetVtableOffset() + MethodTable::GetIndexOfVtableIndirection(method->GetSlot()) * TARGET_POINTER_SIZE /* sizeof(MethodTable::VTableIndir_t) */;
+    *pOffsetAfterIndirection = MethodTable::GetIndexAfterVtableIndirection(method->GetSlot()) * TARGET_POINTER_SIZE /* sizeof(MethodTable::VTableIndir2_t) */;
     *isRelative = MethodTable::VTableIndir_t::isRelative ? 1 : 0;
     _ASSERTE(MethodTable::VTableIndir_t::isRelative == MethodTable::VTableIndir2_t::isRelative);
 
@@ -9148,8 +9154,6 @@ void CEEInfo::getFunctionEntryPoint(CORINFO_METHOD_HANDLE  ftnHnd,
         // should never get here for EnC methods or if interception via remoting stub is required
         _ASSERTE(!ftn->IsEnCMethod());
 
-        _ASSERTE((accessFlags & CORINFO_ACCESS_THIS) || !ftn->IsRemotingInterceptedViaVirtualDispatch());
-
         ret = (void *)ftn->GetAddrOfSlot();
 
         if (MethodTable::VTableIndir2_t::isRelative
@@ -9276,8 +9280,8 @@ CORINFO_CLASS_HANDLE CEEInfo::getFieldClass (CORINFO_FIELD_HANDLE fieldHnd)
 /*********************************************************************/
 // Returns the basic type of the field (not the the type that declares the field)
 //
-// pTypeHnd - On return, for reference and value types, *pTypeHnd will contain 
-//            the normalized type of the field.
+// pTypeHnd - Optional. If not null then on return, for reference and value types, 
+//            *pTypeHnd will contain the normalized type of the field.
 // owner - Optional. For resolving in a generic context
 
 CorInfoType CEEInfo::getFieldType (CORINFO_FIELD_HANDLE fieldHnd, 
@@ -9309,7 +9313,10 @@ CorInfoType CEEInfo::getFieldTypeInternal (CORINFO_FIELD_HANDLE fieldHnd,
 {
     STANDARD_VM_CONTRACT;
 
-    *pTypeHnd = 0;
+    if (pTypeHnd != nullptr)
+    {
+        *pTypeHnd = 0;
+    }
 
     TypeHandle clsHnd = TypeHandle();
     FieldDesc* field = (FieldDesc*) fieldHnd;
