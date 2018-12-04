@@ -359,8 +359,11 @@ public:
 #if OPT_BOOL_OPS
     unsigned char lvIsBoolean : 1; // set if variable is boolean
 #endif
+    unsigned char lvSingleDef : 1; // variable has a single def
+                                   // before lvaMarkLocalVars: identifies ref type locals that can get type updates
+                                   // after lvaMarkLocalVars: identifies locals that are suitable for optAddCopies
+
 #if ASSERTION_PROP
-    unsigned char lvSingleDef : 1;    // variable has a single def
     unsigned char lvDisqualify : 1;   // variable is no longer OK for add copy optimization
     unsigned char lvVolatileHint : 1; // hint for AssertionProp
 #endif
@@ -2438,7 +2441,11 @@ public:
 
     GenTree* gtNewAssignNode(GenTree* dst, GenTree* src);
 
-    GenTree* gtNewTempAssign(unsigned tmp, GenTree* val);
+    GenTree* gtNewTempAssign(unsigned    tmp,
+                             GenTree*    val,
+                             GenTree**   pAfterStmt = nullptr,
+                             IL_OFFSETX  ilOffset   = BAD_IL_OFFSET,
+                             BasicBlock* block      = nullptr);
 
     GenTree* gtNewRefCOMfield(GenTree*                objPtr,
                               CORINFO_RESOLVED_TOKEN* pResolvedToken,
@@ -2579,6 +2586,10 @@ public:
         gtFoldExprConst(GenTree* tree);
     GenTree* gtFoldExprSpecial(GenTree* tree);
     GenTree* gtFoldExprCompare(GenTree* tree);
+    GenTree* gtCreateHandleCompare(genTreeOps             oper,
+                                   GenTree*               op1,
+                                   GenTree*               op2,
+                                   CorInfoInlineTypeCheck typeCheckInliningResult);
     GenTree* gtFoldExprCall(GenTreeCall* call);
     GenTree* gtFoldTypeCompare(GenTree* tree);
     GenTree* gtFoldTypeEqualityCall(CorInfoIntrinsics methodID, GenTree* op1, GenTree* op2);
@@ -2603,15 +2614,17 @@ public:
     // Get the handle, and assert if not found.
     CORINFO_CLASS_HANDLE gtGetStructHandle(GenTree* tree);
     // Get the handle for a ref type.
-    CORINFO_CLASS_HANDLE gtGetClassHandle(GenTree* tree, bool* isExact, bool* isNonNull);
+    CORINFO_CLASS_HANDLE gtGetClassHandle(GenTree* tree, bool* pIsExact, bool* pIsNonNull);
     // Get the class handle for an helper call
-    CORINFO_CLASS_HANDLE gtGetHelperCallClassHandle(GenTreeCall* call, bool* isExact, bool* isNonNull);
+    CORINFO_CLASS_HANDLE gtGetHelperCallClassHandle(GenTreeCall* call, bool* pIsExact, bool* pIsNonNull);
     // Get the element handle for an array of ref type.
     CORINFO_CLASS_HANDLE gtGetArrayElementClassHandle(GenTree* array);
     // Get a class handle from a helper call argument
     CORINFO_CLASS_HANDLE gtGetHelperArgClassHandle(GenTree*  array,
                                                    unsigned* runtimeLookupCount = nullptr,
                                                    GenTree** handleTree         = nullptr);
+    // Get the class handle for a field
+    CORINFO_CLASS_HANDLE gtGetFieldClassHandle(CORINFO_FIELD_HANDLE fieldHnd, bool* pIsExact, bool* pIsNonNull);
     // Check if this tree is a gc static base helper call
     bool gtIsStaticGCBaseHelperCall(GenTree* tree);
 
@@ -3397,6 +3410,7 @@ protected:
     NamedIntrinsic lookupNamedIntrinsic(CORINFO_METHOD_HANDLE method);
 
 #ifdef FEATURE_HW_INTRINSICS
+    GenTree* impBaseIntrinsic(NamedIntrinsic intrinsic, CORINFO_METHOD_HANDLE method, CORINFO_SIG_INFO* sig);
     GenTree* impHWIntrinsic(NamedIntrinsic        intrinsic,
                             CORINFO_METHOD_HANDLE method,
                             CORINFO_SIG_INFO*     sig,
@@ -3459,7 +3473,6 @@ protected:
     GenTree* getArgForHWIntrinsic(var_types argType, CORINFO_CLASS_HANDLE argClass);
     GenTree* impNonConstFallback(NamedIntrinsic intrinsic, var_types simdType, var_types baseType);
     GenTree* addRangeCheckIfNeeded(NamedIntrinsic intrinsic, GenTree* lastOp, bool mustExpand);
-    bool hwIntrinsicSignatureTypeSupported(var_types retType, CORINFO_SIG_INFO* sig, NamedIntrinsic intrinsic);
 #endif // _TARGET_XARCH_
 #ifdef _TARGET_ARM64_
     InstructionSet lookupHWIntrinsicISA(const char* className);
@@ -3523,12 +3536,14 @@ public:
                              CORINFO_CLASS_HANDLE structHnd,
                              unsigned             curLevel,
                              GenTree**            pAfterStmt = nullptr,
+                             IL_OFFSETX           ilOffset   = BAD_IL_OFFSET,
                              BasicBlock*          block      = nullptr);
     GenTree* impAssignStructPtr(GenTree*             dest,
                                 GenTree*             src,
                                 CORINFO_CLASS_HANDLE structHnd,
                                 unsigned             curLevel,
                                 GenTree**            pAfterStmt = nullptr,
+                                IL_OFFSETX           ilOffset   = BAD_IL_OFFSET,
                                 BasicBlock*          block      = nullptr);
 
     GenTree* impGetStructAddr(GenTree* structVal, CORINFO_CLASS_HANDLE structHnd, unsigned curLevel, bool willDeref);
@@ -5384,6 +5399,7 @@ private:
 
     TypeProducerKind gtGetTypeProducerKind(GenTree* tree);
     bool gtIsTypeHandleToRuntimeTypeHelper(GenTreeCall* call);
+    bool gtIsTypeHandleToRuntimeTypeHandleHelper(GenTreeCall* call, CorInfoHelpFunc* pHelper = nullptr);
     bool gtIsActiveCSE_Candidate(GenTree* tree);
 
 #ifdef DEBUG
@@ -6505,6 +6521,7 @@ public:
 
     // Used for Relop propagation.
     AssertionIndex optGlobalAssertionIsEqualOrNotEqual(ASSERT_VALARG_TP assertions, GenTree* op1, GenTree* op2);
+    AssertionIndex optGlobalAssertionIsEqualOrNotEqualZero(ASSERT_VALARG_TP assertions, GenTree* op1);
     AssertionIndex optLocalAssertionIsEqualOrNotEqual(
         optOp1Kind op1Kind, unsigned lclNum, optOp2Kind op2Kind, ssize_t cnsVal, ASSERT_VALARG_TP assertions);
 
@@ -7523,12 +7540,12 @@ private:
 #ifdef FEATURE_HW_INTRINSICS
 #if defined(_TARGET_ARM64_)
         CORINFO_CLASS_HANDLE Vector64FloatHandle;
-        CORINFO_CLASS_HANDLE Vector64UIntHandle;
+        CORINFO_CLASS_HANDLE Vector64IntHandle;
         CORINFO_CLASS_HANDLE Vector64UShortHandle;
         CORINFO_CLASS_HANDLE Vector64UByteHandle;
         CORINFO_CLASS_HANDLE Vector64ShortHandle;
         CORINFO_CLASS_HANDLE Vector64ByteHandle;
-        CORINFO_CLASS_HANDLE Vector64IntHandle;
+        CORINFO_CLASS_HANDLE Vector64UIntHandle;
 #endif // defined(_TARGET_ARM64_)
         CORINFO_CLASS_HANDLE Vector128FloatHandle;
         CORINFO_CLASS_HANDLE Vector128DoubleHandle;
@@ -8406,6 +8423,10 @@ public:
 #endif // DEBUG
 
 #ifdef DEBUG
+// silence warning of cast to greater size. It is easier to silence than construct code the compiler is happy with, and
+// it is safe in this case
+#pragma warning(push)
+#pragma warning(disable : 4312)
 
     template <typename T>
     T dspPtr(T p)
@@ -8418,6 +8439,7 @@ public:
     {
         return (o == ZERO) ? ZERO : (opts.dspDiffable ? T(0xD1FFAB1E) : o);
     }
+#pragma warning(pop)
 
     static int dspTreeID(GenTree* tree)
     {

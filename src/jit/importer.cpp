@@ -785,7 +785,7 @@ void Compiler::impAssignTempGen(unsigned             tmpNum,
         val->gtType = lvaTable[tmpNum].lvType;
 
         GenTree* dst = gtNewLclvNode(tmpNum, val->gtType);
-        asg          = impAssignStruct(dst, val, structType, curLevel, pAfterStmt, block);
+        asg          = impAssignStruct(dst, val, structType, curLevel, pAfterStmt, ilOffset, block);
     }
     else
     {
@@ -1013,23 +1013,39 @@ GenTreeArgList* Compiler::impPopRevList(unsigned count, CORINFO_SIG_INFO* sig, u
     }
 }
 
-/*****************************************************************************
-   Assign (copy) the structure from 'src' to 'dest'.  The structure is a value
-   class of type 'clsHnd'.  It returns the tree that should be appended to the
-   statement list that represents the assignment.
-   Temp assignments may be appended to impTreeList if spilling is necessary.
-   curLevel is the stack level for which a spill may be being done.
- */
+//------------------------------------------------------------------------
+// impAssignStruct: Assign (copy) the structure from 'src' to 'dest'.
+//
+// Arguments:
+//    dest         - destination of the assignment
+//    src          - source of the assignment
+//    structHnd    - handle representing the struct type
+//    curLevel     - stack level for which a spill may be being done
+//    pAfterStmt   - statement to insert any additional statements after
+//    ilOffset     - il offset for new statements
+//    block        - block to insert any additional statements in
+//
+// Return Value:
+//    The tree that should be appended to the statement list that represents the assignment.
+//
+// Notes:
+//    Temp assignments may be appended to impTreeList if spilling is necessary.
 
 GenTree* Compiler::impAssignStruct(GenTree*             dest,
                                    GenTree*             src,
                                    CORINFO_CLASS_HANDLE structHnd,
                                    unsigned             curLevel,
-                                   GenTree**            pAfterStmt, /* = NULL */
-                                   BasicBlock*          block       /* = NULL */
+                                   GenTree**            pAfterStmt, /* = nullptr */
+                                   IL_OFFSETX           ilOffset,   /* = BAD_IL_OFFSET */
+                                   BasicBlock*          block       /* = nullptr */
                                    )
 {
     assert(varTypeIsStruct(dest));
+
+    if (ilOffset == BAD_IL_OFFSET)
+    {
+        ilOffset = impCurStmtOffs;
+    }
 
     while (dest->gtOper == GT_COMMA)
     {
@@ -1038,11 +1054,11 @@ GenTree* Compiler::impAssignStruct(GenTree*             dest,
         // Append all the op1 of GT_COMMA trees before we evaluate op2 of the GT_COMMA tree.
         if (pAfterStmt)
         {
-            *pAfterStmt = fgInsertStmtAfter(block, *pAfterStmt, gtNewStmt(dest->gtOp.gtOp1, impCurStmtOffs));
+            *pAfterStmt = fgInsertStmtAfter(block, *pAfterStmt, gtNewStmt(dest->gtOp.gtOp1, ilOffset));
         }
         else
         {
-            impAppendTree(dest->gtOp.gtOp1, curLevel, impCurStmtOffs); // do the side effect
+            impAppendTree(dest->gtOp.gtOp1, curLevel, ilOffset); // do the side effect
         }
 
         // set dest to the second thing
@@ -1072,22 +1088,44 @@ GenTree* Compiler::impAssignStruct(GenTree*             dest,
         destAddr = gtNewOperNode(GT_ADDR, TYP_BYREF, dest);
     }
 
-    return (impAssignStructPtr(destAddr, src, structHnd, curLevel, pAfterStmt, block));
+    return (impAssignStructPtr(destAddr, src, structHnd, curLevel, pAfterStmt, ilOffset, block));
 }
 
-/*****************************************************************************/
+//------------------------------------------------------------------------
+// impAssignStructPtr: Assign (copy) the structure from 'src' to 'destAddr'.
+//
+// Arguments:
+//    destAddr     - address of the destination of the assignment
+//    src          - source of the assignment
+//    structHnd    - handle representing the struct type
+//    curLevel     - stack level for which a spill may be being done
+//    pAfterStmt   - statement to insert any additional statements after
+//    ilOffset     - il offset for new statements
+//    block        - block to insert any additional statements in
+//
+// Return Value:
+//    The tree that should be appended to the statement list that represents the assignment.
+//
+// Notes:
+//    Temp assignments may be appended to impTreeList if spilling is necessary.
 
 GenTree* Compiler::impAssignStructPtr(GenTree*             destAddr,
                                       GenTree*             src,
                                       CORINFO_CLASS_HANDLE structHnd,
                                       unsigned             curLevel,
                                       GenTree**            pAfterStmt, /* = NULL */
+                                      IL_OFFSETX           ilOffset,   /* = BAD_IL_OFFSET */
                                       BasicBlock*          block       /* = NULL */
                                       )
 {
     var_types destType;
     GenTree*  dest      = nullptr;
     unsigned  destFlags = 0;
+
+    if (ilOffset == BAD_IL_OFFSET)
+    {
+        ilOffset = impCurStmtOffs;
+    }
 
 #if defined(UNIX_AMD64_ABI)
     assert(varTypeIsStruct(src) || (src->gtOper == GT_ADDR && src->TypeGet() == TYP_BYREF));
@@ -1281,11 +1319,11 @@ GenTree* Compiler::impAssignStructPtr(GenTree*             destAddr,
         GenTree* asg = gtNewAssignNode(ptrSlot, src->gtOp.gtOp1);
         if (pAfterStmt)
         {
-            *pAfterStmt = fgInsertStmtAfter(block, *pAfterStmt, gtNewStmt(asg, impCurStmtOffs));
+            *pAfterStmt = fgInsertStmtAfter(block, *pAfterStmt, gtNewStmt(asg, ilOffset));
         }
         else
         {
-            impAppendTree(asg, curLevel, impCurStmtOffs);
+            impAppendTree(asg, curLevel, ilOffset);
         }
 
         // return the assign of the type value, to be appended
@@ -1297,15 +1335,15 @@ GenTree* Compiler::impAssignStructPtr(GenTree*             destAddr,
         assert(varTypeIsStruct(src->gtOp.gtOp2) || src->gtOp.gtOp2->gtType == TYP_BYREF);
         if (pAfterStmt)
         {
-            *pAfterStmt = fgInsertStmtAfter(block, *pAfterStmt, gtNewStmt(src->gtOp.gtOp1, impCurStmtOffs));
+            *pAfterStmt = fgInsertStmtAfter(block, *pAfterStmt, gtNewStmt(src->gtOp.gtOp1, ilOffset));
         }
         else
         {
-            impAppendTree(src->gtOp.gtOp1, curLevel, impCurStmtOffs); // do the side effect
+            impAppendTree(src->gtOp.gtOp1, curLevel, ilOffset); // do the side effect
         }
 
         // Evaluate the second thing using recursion.
-        return impAssignStructPtr(destAddr, src->gtOp.gtOp2, structHnd, curLevel, pAfterStmt, block);
+        return impAssignStructPtr(destAddr, src->gtOp.gtOp2, structHnd, curLevel, pAfterStmt, ilOffset, block);
     }
     else if (src->IsLocal())
     {
@@ -2217,6 +2255,9 @@ bool Compiler::impSpillStackEntry(unsigned level,
     // If temp is newly introduced and a ref type, grab what type info we can.
     if (isNewTemp && (lvaTable[tnum].lvType == TYP_REF))
     {
+        assert(lvaTable[tnum].lvSingleDef == 0);
+        lvaTable[tnum].lvSingleDef = 1;
+        JITDUMP("Marked V%02u as a single def temp\n", tnum);
         CORINFO_CLASS_HANDLE stkHnd = verCurrentState.esStack[level].seTypeInfo.GetClassHandle();
         lvaSetClass(tnum, tree, stkHnd);
 
@@ -3384,7 +3425,54 @@ GenTree* Compiler::impIntrinsic(GenTree*                newobjThis,
             ni = lookupNamedIntrinsic(method);
 
 #ifdef FEATURE_HW_INTRINSICS
-            if (ni > NI_HW_INTRINSIC_START && ni < NI_HW_INTRINSIC_END)
+            switch (ni)
+            {
+#if defined(_TARGET_ARM64_)
+                case NI_Base_Vector64_AsByte:
+                case NI_Base_Vector64_AsInt16:
+                case NI_Base_Vector64_AsInt32:
+                case NI_Base_Vector64_AsSByte:
+                case NI_Base_Vector64_AsSingle:
+                case NI_Base_Vector64_AsUInt16:
+                case NI_Base_Vector64_AsUInt32:
+#endif // _TARGET_ARM64_
+                case NI_Base_Vector128_As:
+                case NI_Base_Vector128_AsByte:
+                case NI_Base_Vector128_AsDouble:
+                case NI_Base_Vector128_AsInt16:
+                case NI_Base_Vector128_AsInt32:
+                case NI_Base_Vector128_AsInt64:
+                case NI_Base_Vector128_AsSByte:
+                case NI_Base_Vector128_AsSingle:
+                case NI_Base_Vector128_AsUInt16:
+                case NI_Base_Vector128_AsUInt32:
+                case NI_Base_Vector128_AsUInt64:
+#if defined(_TARGET_XARCH_)
+                case NI_Base_Vector128_Zero:
+                case NI_Base_Vector256_As:
+                case NI_Base_Vector256_AsByte:
+                case NI_Base_Vector256_AsDouble:
+                case NI_Base_Vector256_AsInt16:
+                case NI_Base_Vector256_AsInt32:
+                case NI_Base_Vector256_AsInt64:
+                case NI_Base_Vector256_AsSByte:
+                case NI_Base_Vector256_AsSingle:
+                case NI_Base_Vector256_AsUInt16:
+                case NI_Base_Vector256_AsUInt32:
+                case NI_Base_Vector256_AsUInt64:
+                case NI_Base_Vector256_Zero:
+#endif // _TARGET_XARCH_
+                {
+                    return impBaseIntrinsic(ni, method, sig);
+                }
+
+                default:
+                {
+                    break;
+                }
+            }
+
+            if ((ni > NI_HW_INTRINSIC_START) && (ni < NI_HW_INTRINSIC_END))
             {
                 GenTree* hwintrinsic = impHWIntrinsic(ni, method, sig, mustExpand);
 
@@ -3583,11 +3671,23 @@ GenTree* Compiler::impIntrinsic(GenTree*                newobjThis,
 
         case CORINFO_INTRINSIC_GetTypeFromHandle:
             op1 = impStackTop(0).val;
+            CorInfoHelpFunc typeHandleHelper;
             if (op1->gtOper == GT_CALL && (op1->gtCall.gtCallType == CT_HELPER) &&
-                gtIsTypeHandleToRuntimeTypeHelper(op1->AsCall()))
+                gtIsTypeHandleToRuntimeTypeHandleHelper(op1->AsCall(), &typeHandleHelper))
             {
                 op1 = impPopStack().val;
-                // Change call to return RuntimeType directly.
+                // Replace helper with a more specialized helper that returns RuntimeType
+                if (typeHandleHelper == CORINFO_HELP_TYPEHANDLE_TO_RUNTIMETYPEHANDLE)
+                {
+                    typeHandleHelper = CORINFO_HELP_TYPEHANDLE_TO_RUNTIMETYPE;
+                }
+                else
+                {
+                    assert(typeHandleHelper == CORINFO_HELP_TYPEHANDLE_TO_RUNTIMETYPEHANDLE_MAYBENULL);
+                    typeHandleHelper = CORINFO_HELP_TYPEHANDLE_TO_RUNTIMETYPE_MAYBENULL;
+                }
+                assert(op1->gtCall.gtCallArgs->gtOp.gtOp2 == nullptr);
+                op1         = gtNewHelperCallNode(typeHandleHelper, TYP_REF, op1->gtCall.gtCallArgs);
                 op1->gtType = TYP_REF;
                 retNode     = op1;
             }
@@ -3597,7 +3697,7 @@ GenTree* Compiler::impIntrinsic(GenTree*                newobjThis,
         case CORINFO_INTRINSIC_RTH_GetValueInternal:
             op1 = impStackTop(0).val;
             if (op1->gtOper == GT_CALL && (op1->gtCall.gtCallType == CT_HELPER) &&
-                gtIsTypeHandleToRuntimeTypeHelper(op1->AsCall()))
+                gtIsTypeHandleToRuntimeTypeHandleHelper(op1->AsCall()))
             {
                 // Old tree
                 // Helper-RuntimeTypeHandle -> TreeToGetNativeTypeHandle
@@ -3771,6 +3871,8 @@ GenTree* Compiler::impIntrinsic(GenTree*                newobjThis,
             GenTree* ptrToSpan      = impPopStack().val;
             GenTree* indexClone     = nullptr;
             GenTree* ptrToSpanClone = nullptr;
+            assert(varTypeIsIntegral(index));
+            assert(ptrToSpan->TypeGet() == TYP_BYREF);
 
 #if defined(DEBUG)
             if (verbose)
@@ -3993,6 +4095,131 @@ GenTree* Compiler::impIntrinsic(GenTree*                newobjThis,
     return retNode;
 }
 
+#ifdef FEATURE_HW_INTRINSICS
+//------------------------------------------------------------------------
+// impBaseIntrinsic: dispatch intrinsics to their own implementation
+//
+// Arguments:
+//    intrinsic  -- id of the intrinsic function.
+//    method     -- method handle of the intrinsic function.
+//    sig        -- signature of the intrinsic call
+//
+// Return Value:
+//    the expanded intrinsic.
+//
+GenTree* Compiler::impBaseIntrinsic(NamedIntrinsic intrinsic, CORINFO_METHOD_HANDLE method, CORINFO_SIG_INFO* sig)
+{
+    GenTree* retNode = nullptr;
+
+    if (!featureSIMD)
+    {
+        return nullptr;
+    }
+
+    unsigned  simdSize = 0;
+    var_types baseType = getBaseTypeAndSizeOfSIMDType(sig->retTypeClass, &simdSize);
+    var_types retType  = getSIMDTypeForSize(simdSize);
+
+    if (sig->hasThis())
+    {
+        CORINFO_CLASS_HANDLE thisClass = info.compCompHnd->getArgClass(sig, sig->args);
+        var_types            thisType  = getBaseTypeOfSIMDType(thisClass);
+
+        if (!varTypeIsArithmetic(thisType))
+        {
+            return nullptr;
+        }
+    }
+
+    if (!varTypeIsArithmetic(baseType))
+    {
+        return nullptr;
+    }
+
+    switch (intrinsic)
+    {
+#if defined(_TARGET_ARM64_)
+        case NI_Base_Vector64_AsByte:
+        case NI_Base_Vector64_AsInt16:
+        case NI_Base_Vector64_AsInt32:
+        case NI_Base_Vector64_AsSByte:
+        case NI_Base_Vector64_AsSingle:
+        case NI_Base_Vector64_AsUInt16:
+        case NI_Base_Vector64_AsUInt32:
+#endif // _TARGET_ARM64_
+        case NI_Base_Vector128_As:
+        case NI_Base_Vector128_AsByte:
+        case NI_Base_Vector128_AsDouble:
+        case NI_Base_Vector128_AsInt16:
+        case NI_Base_Vector128_AsInt32:
+        case NI_Base_Vector128_AsInt64:
+        case NI_Base_Vector128_AsSByte:
+        case NI_Base_Vector128_AsSingle:
+        case NI_Base_Vector128_AsUInt16:
+        case NI_Base_Vector128_AsUInt32:
+        case NI_Base_Vector128_AsUInt64:
+#if defined(_TARGET_XARCH_)
+        case NI_Base_Vector256_As:
+        case NI_Base_Vector256_AsByte:
+        case NI_Base_Vector256_AsDouble:
+        case NI_Base_Vector256_AsInt16:
+        case NI_Base_Vector256_AsInt32:
+        case NI_Base_Vector256_AsInt64:
+        case NI_Base_Vector256_AsSByte:
+        case NI_Base_Vector256_AsSingle:
+        case NI_Base_Vector256_AsUInt16:
+        case NI_Base_Vector256_AsUInt32:
+        case NI_Base_Vector256_AsUInt64:
+#endif // _TARGET_XARCH_
+        {
+            // We fold away the cast here, as it only exists to satisfy
+            // the type system. It is safe to do this here since the retNode type
+            // and the signature return type are both the same TYP_SIMD.
+
+            assert(sig->numArgs == 0);
+            assert(sig->hasThis());
+
+            retNode = impSIMDPopStack(retType, true, sig->retTypeClass);
+            SetOpLclRelatedToSIMDIntrinsic(retNode);
+            assert(retNode->gtType == getSIMDTypeForSize(getSIMDTypeSizeInBytes(sig->retTypeSigClass)));
+            break;
+        }
+
+#ifdef _TARGET_XARCH_
+        case NI_Base_Vector128_Zero:
+        {
+            assert(sig->numArgs == 0);
+
+            if (compSupports(InstructionSet_SSE))
+            {
+                retNode = gtNewSimdHWIntrinsicNode(retType, intrinsic, baseType, simdSize);
+            }
+            break;
+        }
+
+        case NI_Base_Vector256_Zero:
+        {
+            assert(sig->numArgs == 0);
+
+            if (compSupports(InstructionSet_AVX))
+            {
+                retNode = gtNewSimdHWIntrinsicNode(retType, intrinsic, baseType, simdSize);
+            }
+            break;
+        }
+#endif // _TARGET_XARCH_
+
+        default:
+        {
+            unreached();
+            break;
+        }
+    }
+
+    return retNode;
+}
+#endif // FEATURE_HW_INTRINSICS
+
 GenTree* Compiler::impMathIntrinsic(CORINFO_METHOD_HANDLE method,
                                     CORINFO_SIG_INFO*     sig,
                                     var_types             callType,
@@ -4087,9 +4314,11 @@ NamedIntrinsic Compiler::lookupNamedIntrinsic(CORINFO_METHOD_HANDLE method)
 {
     NamedIntrinsic result = NI_Illegal;
 
-    const char* className     = nullptr;
-    const char* namespaceName = nullptr;
-    const char* methodName    = info.compCompHnd->getMethodNameFromMetadata(method, &className, &namespaceName);
+    const char* className          = nullptr;
+    const char* namespaceName      = nullptr;
+    const char* enclosingClassName = nullptr;
+    const char* methodName =
+        info.compCompHnd->getMethodNameFromMetadata(method, &className, &namespaceName, &enclosingClassName);
 
     if ((namespaceName == nullptr) || (className == nullptr) || (methodName == nullptr))
     {
@@ -4127,21 +4356,207 @@ NamedIntrinsic Compiler::lookupNamedIntrinsic(CORINFO_METHOD_HANDLE method)
             result = NI_System_Collections_Generic_EqualityComparer_get_Default;
         }
     }
-
 #ifdef FEATURE_HW_INTRINSICS
+    else if (strncmp(namespaceName, "System.Runtime.Intrinsics", 25) == 0)
+    {
+        namespaceName += 25;
+
+        if (namespaceName[0] == '\0')
+        {
+            if (strncmp(className, "Vector", 6) == 0)
+            {
+                className += 6;
+
+#if defined(_TARGET_ARM64_)
+                if (strncmp(className, "64", 2) == 0)
+                {
+                    className += 2;
+
+                    if (strcmp(className, "`1") == 0)
+                    {
+                        if (strncmp(methodName, "As", 2) == 0)
+                        {
+                            methodName += 2;
+
+                            // Vector64_As, Vector64_AsDouble, Vector64_AsInt64, and Vector64_AsUInt64
+                            // are not currently supported as they require additional plumbing to be
+                            // supported by the JIT as TYP_SIMD8.
+
+                            if (strcmp(methodName, "Byte") == 0)
+                            {
+                                result = NI_Base_Vector64_AsByte;
+                            }
+                            else if (strcmp(methodName, "Int16") == 0)
+                            {
+                                result = NI_Base_Vector64_AsInt16;
+                            }
+                            else if (strcmp(methodName, "Int32") == 0)
+                            {
+                                result = NI_Base_Vector64_AsInt32;
+                            }
+                            else if (strcmp(methodName, "SByte") == 0)
+                            {
+                                result = NI_Base_Vector64_AsSByte;
+                            }
+                            else if (strcmp(methodName, "Single") == 0)
+                            {
+                                result = NI_Base_Vector64_AsSingle;
+                            }
+                            else if (strcmp(methodName, "UInt16") == 0)
+                            {
+                                result = NI_Base_Vector64_AsUInt16;
+                            }
+                            else if (strcmp(methodName, "UInt32") == 0)
+                            {
+                                result = NI_Base_Vector64_AsUInt32;
+                            }
+                        }
+                    }
+                }
+                else
+#endif // _TARGET_ARM64_
+                    if (strncmp(className, "128", 3) == 0)
+                {
+                    className += 3;
+
+                    if (strcmp(className, "`1") == 0)
+                    {
+                        if (strncmp(methodName, "As", 2) == 0)
+                        {
+                            methodName += 2;
+
+                            if (strcmp(methodName, "`1") == 0)
+                            {
+                                result = NI_Base_Vector128_As;
+                            }
+                            else if (strcmp(methodName, "Byte") == 0)
+                            {
+                                result = NI_Base_Vector128_AsByte;
+                            }
+                            else if (strcmp(methodName, "Double") == 0)
+                            {
+                                result = NI_Base_Vector128_AsDouble;
+                            }
+                            else if (strcmp(methodName, "Int16") == 0)
+                            {
+                                result = NI_Base_Vector128_AsInt16;
+                            }
+                            else if (strcmp(methodName, "Int32") == 0)
+                            {
+                                result = NI_Base_Vector128_AsInt32;
+                            }
+                            else if (strcmp(methodName, "Int64") == 0)
+                            {
+                                result = NI_Base_Vector128_AsInt64;
+                            }
+                            else if (strcmp(methodName, "SByte") == 0)
+                            {
+                                result = NI_Base_Vector128_AsSByte;
+                            }
+                            else if (strcmp(methodName, "Single") == 0)
+                            {
+                                result = NI_Base_Vector128_AsSingle;
+                            }
+                            else if (strcmp(methodName, "UInt16") == 0)
+                            {
+                                result = NI_Base_Vector128_AsUInt16;
+                            }
+                            else if (strcmp(methodName, "UInt32") == 0)
+                            {
+                                result = NI_Base_Vector128_AsUInt32;
+                            }
+                            else if (strcmp(methodName, "UInt64") == 0)
+                            {
+                                result = NI_Base_Vector128_AsUInt64;
+                            }
+                        }
 #if defined(_TARGET_XARCH_)
-    if (strcmp(namespaceName, "System.Runtime.Intrinsics.X86") == 0)
-    {
-        result = HWIntrinsicInfo::lookupId(className, methodName);
-    }
+                        else if (strcmp(methodName, "get_Zero") == 0)
+                        {
+                            result = NI_Base_Vector128_Zero;
+                        }
+#endif // _TARGET_XARCH_
+                    }
+                }
+#if defined(_TARGET_XARCH_)
+                else if (strncmp(className, "256", 3) == 0)
+                {
+                    className += 3;
+
+                    if (strcmp(className, "`1") == 0)
+                    {
+                        if (strncmp(methodName, "As", 2) == 0)
+                        {
+                            methodName += 2;
+
+                            if (strcmp(methodName, "`1") == 0)
+                            {
+                                result = NI_Base_Vector256_As;
+                            }
+                            else if (strcmp(methodName, "Byte") == 0)
+                            {
+                                result = NI_Base_Vector256_AsByte;
+                            }
+                            else if (strcmp(methodName, "Double") == 0)
+                            {
+                                result = NI_Base_Vector256_AsDouble;
+                            }
+                            else if (strcmp(methodName, "Int16") == 0)
+                            {
+                                result = NI_Base_Vector256_AsInt16;
+                            }
+                            else if (strcmp(methodName, "Int32") == 0)
+                            {
+                                result = NI_Base_Vector256_AsInt32;
+                            }
+                            else if (strcmp(methodName, "Int64") == 0)
+                            {
+                                result = NI_Base_Vector256_AsInt64;
+                            }
+                            else if (strcmp(methodName, "SByte") == 0)
+                            {
+                                result = NI_Base_Vector256_AsSByte;
+                            }
+                            else if (strcmp(methodName, "Single") == 0)
+                            {
+                                result = NI_Base_Vector256_AsSingle;
+                            }
+                            else if (strcmp(methodName, "UInt16") == 0)
+                            {
+                                result = NI_Base_Vector256_AsUInt16;
+                            }
+                            else if (strcmp(methodName, "UInt32") == 0)
+                            {
+                                result = NI_Base_Vector256_AsUInt32;
+                            }
+                            else if (strcmp(methodName, "UInt64") == 0)
+                            {
+                                result = NI_Base_Vector256_AsUInt64;
+                            }
+                        }
+                        else if (strcmp(methodName, "get_Zero") == 0)
+                        {
+                            result = NI_Base_Vector256_Zero;
+                        }
+                    }
+                }
+#endif // _TARGET_XARCH_
+            }
+        }
+#if defined(_TARGET_XARCH_)
+        else if (strcmp(namespaceName, ".X86") == 0)
+        {
+            result = HWIntrinsicInfo::lookupId(className, methodName, enclosingClassName);
+        }
 #elif defined(_TARGET_ARM64_)
-    if (strcmp(namespaceName, "System.Runtime.Intrinsics.Arm.Arm64") == 0)
-    {
-        result = lookupHWIntrinsic(className, methodName);
-    }
+        else if (strcmp(namespaceName, ".Arm.Arm64") == 0)
+        {
+            result = lookupHWIntrinsic(className, methodName);
+        }
 #else // !defined(_TARGET_XARCH_) && !defined(_TARGET_ARM64_)
 #error Unsupported platform
 #endif // !defined(_TARGET_XARCH_) && !defined(_TARGET_ARM64_)
+    }
 #endif // FEATURE_HW_INTRINSICS
 
     return result;
@@ -5648,9 +6063,11 @@ void Compiler::impImportAndPushBox(CORINFO_RESOLVED_TOKEN* pResolvedToken)
         {
             // When optimizing, use a new temp for each box operation
             // since we then know the exact class of the box temp.
-            impBoxTemp                  = lvaGrabTemp(true DEBUGARG("Single-def Box Helper"));
-            lvaTable[impBoxTemp].lvType = TYP_REF;
-            const bool isExact          = true;
+            impBoxTemp                       = lvaGrabTemp(true DEBUGARG("Single-def Box Helper"));
+            lvaTable[impBoxTemp].lvType      = TYP_REF;
+            lvaTable[impBoxTemp].lvSingleDef = 1;
+            JITDUMP("Marking V%02u as a single def local\n", impBoxTemp);
+            const bool isExact = true;
             lvaSetClass(impBoxTemp, pResolvedToken->hClass, isExact);
         }
 
@@ -8350,7 +8767,8 @@ DONE_CALL:
                 if (call->IsCall())
                 {
                     GenTreeCall* callNode = call->AsCall();
-                    if ((callNode->gtCallType == CT_HELPER) && gtIsTypeHandleToRuntimeTypeHelper(callNode))
+                    if ((callNode->gtCallType == CT_HELPER) && (gtIsTypeHandleToRuntimeTypeHelper(callNode) ||
+                                                                gtIsTypeHandleToRuntimeTypeHandleHelper(callNode)))
                     {
                         spillStack = false;
                     }
@@ -10154,6 +10572,10 @@ GenTree* Compiler::impCastClassOrIsInstToTree(GenTree*                op1,
     //
     // See also gtGetHelperCallClassHandle where we make the same
     // determination for the helper call variants.
+    LclVarDsc* lclDsc = lvaGetDesc(tmp);
+    assert(lclDsc->lvSingleDef == 0);
+    lclDsc->lvSingleDef = 1;
+    JITDUMP("Marked V%02u as a single def temp\n", tmp);
     lvaSetClass(tmp, pResolvedToken->hClass);
     return gtNewLclvNode(tmp, TYP_REF);
 #endif
@@ -10809,14 +11231,14 @@ void Compiler::impImportBlockCode(BasicBlock* block)
                     // We should have seen a stloc in our IL prescan.
                     assert(lvaTable[lclNum].lvHasILStoreOp);
 
-                    const bool isSingleILStoreLocal =
-                        !lvaTable[lclNum].lvHasMultipleILStoreOp && !lvaTable[lclNum].lvHasLdAddrOp;
+                    // Is there just one place this local is defined?
+                    const bool isSingleDefLocal = lvaTable[lclNum].lvSingleDef;
 
                     // Conservative check that there is just one
                     // definition that reaches this store.
                     const bool hasSingleReachingDef = (block->bbStackDepthOnEntry() == 0);
 
-                    if (isSingleILStoreLocal && hasSingleReachingDef)
+                    if (isSingleDefLocal && hasSingleReachingDef)
                     {
                         lvaUpdateClass(lclNum, op1, clsHnd);
                     }
@@ -12680,6 +13102,9 @@ void Compiler::impImportBlockCode(BasicBlock* block)
                     // Propagate type info to the temp from the stack and the original tree
                     if (type == TYP_REF)
                     {
+                        assert(lvaTable[tmpNum].lvSingleDef == 0);
+                        lvaTable[tmpNum].lvSingleDef = 1;
+                        JITDUMP("Marked V%02u as a single def local\n", tmpNum);
                         lvaSetClass(tmpNum, tree, tiRetVal.GetClassHandle());
                     }
                 }
@@ -13396,6 +13821,10 @@ void Compiler::impImportBlockCode(BasicBlock* block)
                         // without exhaustive walk over all expressions.
 
                         impAssignTempGen(lclNum, op1, (unsigned)CHECK_SPILL_NONE);
+
+                        assert(lvaTable[lclNum].lvSingleDef == 0);
+                        lvaTable[lclNum].lvSingleDef = 1;
+                        JITDUMP("Marked V%02u as a single def local\n", lclNum);
                         lvaSetClass(lclNum, resolvedToken.hClass, true /* is Exact */);
 
                         newObjThisPtr = gtNewLclvNode(lclNum, TYP_REF);
@@ -14669,7 +15098,8 @@ void Compiler::impImportBlockCode(BasicBlock* block)
                 {
                     GenTreeArgList* helperArgs = gtNewArgList(op1);
 
-                    op1 = gtNewHelperCallNode(CORINFO_HELP_TYPEHANDLE_TO_RUNTIMETYPE_MAYBENULL, TYP_STRUCT, helperArgs);
+                    op1 = gtNewHelperCallNode(CORINFO_HELP_TYPEHANDLE_TO_RUNTIMETYPEHANDLE_MAYBENULL, TYP_STRUCT,
+                                              helperArgs);
 
                     // The handle struct is returned in register
                     op1->gtCall.gtReturnType = GetRuntimeHandleUnderlyingType();
@@ -14695,7 +15125,7 @@ void Compiler::impImportBlockCode(BasicBlock* block)
                     return;
                 }
 
-                helper = CORINFO_HELP_TYPEHANDLE_TO_RUNTIMETYPE;
+                helper = CORINFO_HELP_TYPEHANDLE_TO_RUNTIMETYPEHANDLE;
                 assert(resolvedToken.hClass != nullptr);
 
                 if (resolvedToken.hMethod != nullptr)
@@ -18699,6 +19129,14 @@ unsigned Compiler::impInlineFetchLocal(unsigned lclNum DEBUGARG(const char* reas
         // signature and pass in a more precise type.
         if (lclTyp == TYP_REF)
         {
+            assert(lvaTable[tmpNum].lvSingleDef == 0);
+
+            lvaTable[tmpNum].lvSingleDef = !inlineeLocal.lclHasMultipleStlocOp && !inlineeLocal.lclHasLdlocaOp;
+            if (lvaTable[tmpNum].lvSingleDef)
+            {
+                JITDUMP("Marked V%02u as a single def temp\n", tmpNum);
+            }
+
             lvaSetClass(tmpNum, inlineeLocal.lclVerTypeInfo.GetClassHandleForObjRef());
         }
 
@@ -18890,6 +19328,9 @@ GenTree* Compiler::impInlineFetchArg(unsigned lclNum, InlArgInfo* inlArgInfo, In
                     // If the arg can't be modified in the method
                     // body, use the type of the value, if
                     // known. Otherwise, use the declared type.
+                    assert(lvaTable[tmpNum].lvSingleDef == 0);
+                    lvaTable[tmpNum].lvSingleDef = 1;
+                    JITDUMP("Marked V%02u as a single def temp\n", tmpNum);
                     lvaSetClass(tmpNum, argInfo.argNode, lclInfo.lclVerTypeInfo.GetClassHandleForObjRef());
                 }
                 else

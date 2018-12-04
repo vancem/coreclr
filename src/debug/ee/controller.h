@@ -1789,26 +1789,9 @@ public:
         return DEBUGGER_CONTROLLER_DATA_BREAKPOINT;
     }
 
-    virtual TP_RESULT TriggerPatch(DebuggerControllerPatch *patch,
-                              Thread *thread, 
-                              TRIGGER_WHY tyWhy)
-    {
-#ifdef FEATURE_PAL    
-        #error Not supported
-#endif // FEATURE_PAL
-#if defined(_TARGET_X86_) || defined(_TARGET_AMD64_)
-        CONTEXT *context = g_pEEInterface->GetThreadFilterContext(thread);
-        context->Dr0 = this->m_context.Dr0;
-        context->Dr1 = this->m_context.Dr1;
-        context->Dr2 = this->m_context.Dr2;
-        context->Dr3 = this->m_context.Dr3;
-        context->Dr6 = this->m_context.Dr6;
-        context->Dr7 = this->m_context.Dr7;
-#else // defined(_TARGET_X86_) || defined(_TARGET_AMD64_)
-        #error Not supported
-#endif // defined(_TARGET_X86_) || defined(_TARGET_AMD64_)
-        return TPR_TRIGGER;
-    }
+    virtual TP_RESULT TriggerPatch(DebuggerControllerPatch *patch, Thread *thread,  TRIGGER_WHY tyWhy);
+
+    virtual bool TriggerSingleStep(Thread *thread, const BYTE *ip);
 
     bool SendEvent(Thread *thread, bool fInteruptedBySetIp)
     {
@@ -1822,9 +1805,7 @@ public:
 
         LOG((LF_CORDB, LL_INFO10000, "DDBP::SE: in DebuggerDataBreakpoint's SendEvent\n"));
 
-        CONTEXT *context = g_pEEInterface->GetThreadFilterContext(thread);
-
-        g_pDebugger->SendDataBreakpoint(thread, context, this);
+        g_pDebugger->SendDataBreakpoint(thread, &m_context, this);
 
         Delete();
 

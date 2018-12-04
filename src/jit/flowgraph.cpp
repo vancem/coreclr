@@ -4944,6 +4944,34 @@ void Compiler::fgFindJumpTargets(const BYTE* codeAddr, IL_OFFSET codeSize, Fixed
     {
         fgAdjustForAddressExposedOrWrittenThis();
     }
+
+    // Now that we've seen the IL, set lvSingleDef for root method
+    // locals.
+    //
+    // We could also do this for root method arguments but single-def
+    // arguments are set by the caller and so we don't know anything
+    // about the possible values or types.
+    //
+    // For inlinees we do this over in impInlineFetchLocal and
+    // impInlineFetchArg (here args are included as we somtimes get
+    // new information about the types of inlinee args).
+    if (!isInlining)
+    {
+        const unsigned firstLcl = info.compArgsCount;
+        const unsigned lastLcl  = firstLcl + info.compMethodInfo->locals.numArgs;
+        for (unsigned lclNum = firstLcl; lclNum < lastLcl; lclNum++)
+        {
+            LclVarDsc* lclDsc = lvaGetDesc(lclNum);
+            assert(lclDsc->lvSingleDef == 0);
+            // could restrict this to TYP_REF
+            lclDsc->lvSingleDef = !lclDsc->lvHasMultipleILStoreOp && !lclDsc->lvHasLdAddrOp;
+
+            if (lclDsc->lvSingleDef)
+            {
+                JITDUMP("Marked V%02u as a single def local\n", lclNum);
+            }
+        }
+    }
 }
 
 #ifdef _PREFAST_
@@ -5876,6 +5904,13 @@ void Compiler::fgFindBasicBlocks()
                 // out we can prove the method returns a more specific type.
                 if (info.compRetType == TYP_REF)
                 {
+                    // The return spill temp is single def only if the method has a single return block.
+                    if (retBlocks == 1)
+                    {
+                        lvaTable[lvaInlineeReturnSpillTemp].lvSingleDef = 1;
+                        JITDUMP("Marked return spill temp V%02u as a single def temp\n", lvaInlineeReturnSpillTemp);
+                    }
+
                     CORINFO_CLASS_HANDLE retClassHnd = impInlineInfo->inlineCandidateInfo->methInfo.args.retTypeClass;
                     if (retClassHnd != nullptr)
                     {
@@ -8033,7 +8068,14 @@ GenTree* Compiler::fgCreateMonitorTree(unsigned lvaMonAcquired, unsigned lvaThis
             // in turn passes it to VM to know the size of value type.
             GenTree* temp = fgInsertCommaFormTemp(&retNode->gtOp.gtOp1, info.compMethodInfo->args.retTypeClass);
 
-            GenTree* lclVar                 = retNode->gtOp.gtOp1->gtOp.gtOp2;
+            GenTree* lclVar = retNode->gtOp.gtOp1->gtOp.gtOp2;
+
+            // The return can't handle all of the trees that could be on the right-hand-side of an assignment,
+            // especially in the case of a struct. Therefore, we need to propagate GTF_DONT_CSE.
+            // If we don't, assertion propagation may, e.g., change a return of a local to a return of "CNS_INT   struct
+            // 0",
+            // which downstream phases can't handle.
+            lclVar->gtFlags |= (retExpr->gtFlags & GTF_DONT_CSE);
             retNode->gtOp.gtOp1->gtOp.gtOp2 = gtNewOperNode(GT_COMMA, retExpr->TypeGet(), tree, lclVar);
         }
         else
@@ -22192,7 +22234,8 @@ Compiler::fgWalkResult Compiler::fgUpdateInlineReturnExpressionPlaceHolder(GenTr
 
         // Skip through chains of GT_RET_EXPRs (say from nested inlines)
         // to the actual tree to use.
-        GenTree* inlineCandidate = tree->gtRetExprVal();
+        GenTree*  inlineCandidate = tree->gtRetExprVal();
+        var_types retType         = tree->TypeGet();
 
 #ifdef DEBUG
         if (comp->verbose)
@@ -22217,6 +22260,17 @@ Compiler::fgWalkResult Compiler::fgUpdateInlineReturnExpressionPlaceHolder(GenTr
             printf("\n");
         }
 #endif // DEBUG
+
+        var_types newType = tree->TypeGet();
+
+        // If we end up swapping in an RVA static we may need to retype it here,
+        // if we've reinterpreted it as a byref.
+        if ((retType != newType) && (retType == TYP_BYREF) && (tree->OperGet() == GT_IND))
+        {
+            assert(newType == TYP_I_IMPL);
+            JITDUMP("Updating type of the return GT_IND expression to TYP_BYREF\n");
+            tree->gtType = TYP_BYREF;
+        }
     }
 
     // If an inline was rejected and the call returns a struct, we may
@@ -22392,9 +22446,9 @@ Compiler::fgWalkResult Compiler::fgLateDevirtualization(GenTree** pTree, fgWalkD
     // jit\Methodical\VT\callconv\_il_reljumper3 for x64 linux
     //
     // If so, just bail out here.
-    if ((parent != nullptr) && parent->OperGet() == GT_NOP)
+    if (tree == nullptr)
     {
-        assert(tree == nullptr);
+        assert((parent != nullptr) && parent->OperGet() == GT_NOP);
         return WALK_CONTINUE;
     }
 
@@ -22421,6 +22475,31 @@ Compiler::fgWalkResult Compiler::fgLateDevirtualization(GenTree** pTree, fgWalkD
             unsigned               methodFlags = 0;
             CORINFO_CONTEXT_HANDLE context     = nullptr;
             comp->impDevirtualizeCall(call, &method, &methodFlags, &context, nullptr);
+        }
+    }
+    else if (tree->OperGet() == GT_ASG)
+    {
+        // If we're assigning to a ref typed local that has one definition,
+        // we may be able to sharpen the type for the local.
+        GenTree* lhs = tree->gtGetOp1()->gtEffectiveVal();
+
+        if ((lhs->OperGet() == GT_LCL_VAR) && (lhs->TypeGet() == TYP_REF))
+        {
+            const unsigned lclNum = lhs->gtLclVarCommon.gtLclNum;
+            LclVarDsc*     lcl    = comp->lvaGetDesc(lclNum);
+
+            if (lcl->lvSingleDef)
+            {
+                GenTree*             rhs       = tree->gtGetOp2();
+                bool                 isExact   = false;
+                bool                 isNonNull = false;
+                CORINFO_CLASS_HANDLE newClass  = comp->gtGetClassHandle(rhs, &isExact, &isNonNull);
+
+                if (newClass != NO_CLASS_HANDLE)
+                {
+                    comp->lvaUpdateClass(lclNum, newClass, isExact);
+                }
+            }
         }
     }
 

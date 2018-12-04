@@ -235,11 +235,6 @@ ClassID TypeHandleToClassID(TypeHandle th)
 // Stubed-out implementations of functions that can do anything useful only when we are actually running managed code
 //
 
-MethodTable *Object::GetTrueMethodTable()
-{
-    UNREACHABLE();
-}
-
 FuncPtrStubs::FuncPtrStubs()
     : m_hashTableCrst(CrstFuncPtrStubs, CRST_UNSAFE_ANYMODE)
 {
@@ -385,7 +380,7 @@ void EEPolicy::HandleFatalError(UINT exitCode, UINT_PTR address, LPCWSTR pszMess
 
 //---------------------------------------------------------------------------------------
 
-Assembly * AppDomain::RaiseAssemblyResolveEvent(AssemblySpec * pSpec, BOOL fPreBind)
+Assembly * AppDomain::RaiseAssemblyResolveEvent(AssemblySpec * pSpec)
 {
     return NULL;
 }
@@ -402,9 +397,4 @@ DomainAssembly * AppDomain::RaiseTypeResolveEventThrowing(DomainAssembly* pAssem
 
 void AppDomain::RaiseLoadingAssemblyEvent(DomainAssembly *pAssembly)
 {
-}
-
-BOOL AppDomain::BindingByManifestFile()
-{
-    return FALSE;
 }

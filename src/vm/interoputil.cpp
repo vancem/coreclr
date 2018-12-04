@@ -533,19 +533,6 @@ BOOL IsManagedObject(IUnknown *pIUnknown)
         // We found an existing CCW hence this is a managed exception.
         return TRUE;
     }
-    
-    // QI IManagedObject. Note AppX doesn't support IManagedObject
-    if (!AppX::IsAppXProcess())
-    {
-        SafeComHolder<IManagedObject> pManagedObject = NULL;
-        HRESULT hrLocal = SafeQueryInterface(pIUnknown, IID_IManagedObject, (IUnknown**)&pManagedObject);
-        LogInteropQI(pIUnknown, IID_IManagedObject, hrLocal, "QI to determine if IErrorInfo is a managed exception");
-        if(SUCCEEDED(hrLocal))
-        {
-            return TRUE;
-        }
-        
-    }
     return FALSE;
 }
 
@@ -1506,11 +1493,6 @@ ULONG SafeReleasePreemp(IUnknown * pUnk, RCW * pRCW)
     return res;
 }
 
-#if defined(_TARGET_AMD64_) && defined(_MSC_VER)
-// codegen bug on amd64 causes BBT to fail for the following function.  as a
-// workaround I have disabled optimizations for it until we get an updated toolset.
-#pragma optimize( "", off )
-#endif
 //--------------------------------------------------------------------------------
 // Release helper, enables and disables GC during call-outs
 ULONG SafeRelease(IUnknown* pUnk, RCW* pRCW)
@@ -1587,10 +1569,6 @@ ULONG SafeRelease(IUnknown* pUnk, RCW* pRCW)
 
     return res;
 }
-#if defined(_TARGET_AMD64_) && defined(_MSC_VER)
-// turn optimizations back on
-#pragma optimize( "", on )
-#endif
 
 #include <optdefault.h>
 
@@ -1615,7 +1593,7 @@ BOOL CanCastComObject(OBJECTREF obj, MethodTable * pTargetMT)
     }
     else
     {
-        return obj->GetTrueMethodTable()->CanCastToClass(pTargetMT);
+        return obj->GetMethodTable()->CanCastToClass(pTargetMT);
     }
 }
 
@@ -2050,51 +2028,6 @@ HRESULT SafeQueryInterfacePreemp(IUnknown* pUnk, REFIID riid, IUnknown** pResUnk
 
 #ifdef FEATURE_COMINTEROP
 
-// process unique GUID, every process has a unique GUID
-static Volatile<BSTR> bstrProcessGUID = NULL;
-
-// Global process GUID to identify the process
-BSTR GetProcessGUID()
-{
-    CONTRACT (BSTR)
-    {
-        NOTHROW;
-        GC_NOTRIGGER;
-        MODE_ANY;
-        POSTCONDITION(CheckPointer(RETVAL, NULL_OK));
-    }
-    CONTRACT_END;
-    
-    // See if we were beaten to it.
-    if (bstrProcessGUID.Load() == NULL)
-    {
-        // setup a process unique GUID
-        GUID processGUID = GUID_NULL;
-        HRESULT hr = CoCreateGuid(&processGUID);
-        _ASSERTE(hr == S_OK);
-        if (hr != S_OK)
-            RETURN NULL;
-
-        // This is a global memory alloc that will live as long as the process.
-        NewArrayHolder<WCHAR> guidstr = new (nothrow) WCHAR[48];
-        if (!guidstr)
-            RETURN NULL;
-        
-        int cbLen = GuidToLPWSTR (processGUID, guidstr, 46);
-        _ASSERTE(cbLen <= 46);
-        
-        // Save this new stub on the DelegateEEClass.       
-        if (FastInterlockCompareExchangePointer(bstrProcessGUID.GetPointer(), guidstr.GetValue(), NULL ) == NULL)
-        {
-            guidstr.SuppressRelease();
-        }
-        
-    }
-
-    RETURN bstrProcessGUID;
-}
-
-
 #ifndef CROSSGEN_COMPILE
 
 //--------------------------------------------------------------------------------
@@ -2216,40 +2149,6 @@ void ReleaseRCWsInCaches(LPVOID pCtxCookie)
     }
 }
 
-// Out-of-line to keep SafeComHolder's required C++ prolog/epilog out of GetCCWfromIUnknown
-NOINLINE ComCallWrapper* GetCCWFromIUnknown_CrossDomain(IUnknown* pUnk, ComCallWrapper* pWrap, AppDomain* pDomain)
-{
-    CONTRACTL
-    {
-        NOTHROW;
-        GC_TRIGGERS;
-        MODE_ANY;
-    }
-    CONTRACTL_END;
-
-    // We ignore PreferComInsteadOfManagedRemoting/ICustomQueryInterface if the CCW is from
-    // the current domain (we never create RCWs pointing to CCWs in the same domain).
-
-    if (pDomain && pDomain->GetPreferComInsteadOfManagedRemoting())
-    {
-        return NULL;
-    }
-
-    // If the user specifically does not support IManagedObject then don't do this bypass
-    if (pWrap && pWrap->GetSimpleWrapper() && pWrap->GetSimpleWrapper()->SupportsICustomQueryInterface())
-    {
-        SafeComHolder<IUnknown> pUnk = ComCallWrapper::GetComIPFromCCWNoThrow(
-                                            pWrap, IID_IManagedObject, NULL, 
-                                            GetComIPFromCCW::CheckVisibility);
-        if(!pUnk)
-        {
-            // They bypassed QueryInterface so don't collapse this IUnknown to the underlying managed object
-            pWrap = NULL;
-        }
-    }
-    return pWrap;
-}
-
 //--------------------------------------------------------------------------------
 // Marshalling Helpers
 //--------------------------------------------------------------------------------
@@ -2277,16 +2176,6 @@ ComCallWrapper* GetCCWFromIUnknown(IUnknown* pUnk, BOOL bEnableCustomization)
         if (pWrap->GetOuter() != NULL)
         {
             pWrap = NULL;
-        }
-
-        // Only check for an interface if caller set bEnableCustomization to TRUE
-        if (bEnableCustomization)
-        {
-            AppDomain *pDomain = GetAppDomain();
-            if (pDomain == NULL || pWrap == NULL || pDomain->GetId() != pWrap->GetDomainID())
-            {
-                pWrap = GetCCWFromIUnknown_CrossDomain(pUnk, pWrap, pDomain);
-            }
         }
     }
     
@@ -3838,10 +3727,6 @@ BOOL IsTypeVisibleFromCom(TypeHandle hndType)
             return FALSE;
     }
 
-    // If the type is collectible, then it is not visible from COM.
-    if (hndType.GetLoaderAllocator()->IsCollectible())
-        return FALSE;
-
     return SpecialIsGenericTypeVisibleFromCom(hndType);
 }
 
@@ -4014,7 +3899,7 @@ BOOL IsComTargetValidForType(REFLECTCLASSBASEREF* pRefClassObj, OBJECTREF* pTarg
     
     MethodTable* pInvokedMT = (*pRefClassObj)->GetType().GetMethodTable();
 
-    MethodTable* pTargetMT = (*pTarget)->GetTrueMethodTable();
+    MethodTable* pTargetMT = (*pTarget)->GetMethodTable();
     _ASSERTE(pTargetMT);
     PREFIX_ASSUME(pInvokedMT != NULL);
 
@@ -5162,11 +5047,11 @@ ClassFactoryBase *GetComClassFactory(MethodTable* pClassMT)
     if (pClsFac == NULL)
     {
         //
-        // Collectible types do not support com interop
+        // Collectible types do not support WinRT interop
         //
-        if (pClassMT->Collectible())
+        if (pClassMT->Collectible() && (pClassMT->IsExportedToWinRT() || pClassMT->IsProjectedFromWinRT()))
         {
-            COMPlusThrow(kNotSupportedException, W("NotSupported_CollectibleCOM"));
+            COMPlusThrow(kNotSupportedException, W("NotSupported_CollectibleWinRT"));
         }
 
         NewHolder<ClassFactoryBase> pNewFactory;
@@ -6636,7 +6521,7 @@ void UnmarshalObjectFromInterface(OBJECTREF *ppObjectDest, IUnknown **ppUnkSrc, 
             // We only verify that the object supports the interface for non-WinRT scenarios because we
             // believe that the likelihood of improperly constructed programs is significantly lower
             // with WinRT and the Object::SupportsInterface check is very expensive.
-            if (!(*ppObjectDest)->IsTransparentProxy() && !Object::SupportsInterface(*ppObjectDest, pItfMT))
+            if (!Object::SupportsInterface(*ppObjectDest, pItfMT))
             {
                 COMPlusThrowInvalidCastException(ppObjectDest, TypeHandle(pItfMT));
             }
@@ -6832,74 +6717,6 @@ TypeHandle GetClassFromIInspectable(IUnknown* pUnk, bool *pfSupportsIInspectable
     RETURN classTypeHandle;
 }
 
-//--------------------------------------------------------------------------
-// switch objects for this wrapper
-// used by JIT&ObjectPooling to ensure a deactivated CCW can point to a new object
-// during reactivate
-//--------------------------------------------------------------------------
-BOOL ReconnectWrapper(OBJECTREF* pOldRef, OBJECTREF* pNewRef)
-{
-    CONTRACTL
-    {
-        THROWS;
-        GC_TRIGGERS;
-        MODE_COOPERATIVE;
-        PRECONDITION(CheckPointer(pOldRef));
-        PRECONDITION(CheckPointer(pNewRef));
-    }
-    CONTRACTL_END;
-
-    if (!(*pOldRef)->IsTransparentProxy())
-    {
-        COMPlusThrowArgumentException(W("oldtp"), W("Argument_NotATP"));
-    }
-    else if (!(*pNewRef)->IsTransparentProxy())
-    {
-        COMPlusThrowArgumentException(W("newtp"), W("Argument_NotATP"));
-    }
-
-    _ASSERTE((*pOldRef)->GetTrueMethodTable() == (*pNewRef)->GetTrueMethodTable());
-
-    // grab the sync block for the current object
-    SyncBlock* pOldSyncBlock = (*pOldRef)->GetSyncBlock();
-    _ASSERTE(pOldSyncBlock);
-
-    // get the wrapper for the old object
-    InteropSyncBlockInfo* pInteropInfo = pOldSyncBlock->GetInteropInfo();
-    ComCallWrapper* pCCW = pInteropInfo->GetCCW();      
-    if (pCCW == NULL)
-        COMPlusThrowArgumentException(W("oldtp"), W("Argument_NoUnderlyingCCW"));
-
-    // get the syncblock for the new object and allocate an InteropSyncBlockInfo structure
-    SyncBlock* pNewSyncBlock = (*pNewRef)->GetSyncBlock();
-    _ASSERTE(pNewSyncBlock != NULL);
-    
-    NewHolder<InteropSyncBlockInfo> pNewInteropInfo = new InteropSyncBlockInfo();
-    bool check = pNewSyncBlock->SetInteropInfo(pNewInteropInfo);
-
-    //
-    // Now we switch
-    //
-    
-    // First, prevent the old object from getting to the CCW
-    pInteropInfo->SetCCW(NULL);
-        
-    // Next, point the CCW at the new object
-    StoreObjectInHandle(pCCW->GetObjectHandle(), (*pNewRef));
-
-    // Finally, point the new object at the CCW
-    pNewSyncBlock->GetInteropInfo()->SetCCW(pCCW);
-
-    // store other information about the new server
-    SimpleComCallWrapper* pSimpleWrap = pCCW->GetSimpleWrapper();
-    _ASSERTE(pSimpleWrap);
-    pSimpleWrap->ReInit(pNewSyncBlock);
-
-    if (check)
-        pNewInteropInfo.SuppressRelease();
-    
-    return TRUE;
-}
 
 ABI::Windows::Foundation::IUriRuntimeClass *CreateWinRTUri(LPCWSTR wszUri, INT32 cchUri)
 {

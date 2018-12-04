@@ -2386,51 +2386,6 @@ int LinearScan::BuildHWIntrinsic(GenTreeHWIntrinsic* intrinsicTree)
                 break;
             }
 
-            case NI_SSE_SetScalarVector128:
-            case NI_SSE2_SetScalarVector128:
-            {
-                buildInternalFloatRegisterDefForNode(intrinsicTree);
-                setInternalRegsDelayFree = true;
-                break;
-            }
-
-            case NI_SSE_ConvertToSingle:
-            case NI_SSE2_ConvertToDouble:
-            case NI_AVX_ExtendToVector256:
-            case NI_AVX_GetLowerHalf:
-            case NI_AVX2_ConvertToDouble:
-            {
-                assert(numArgs == 1);
-                assert(!isRMW);
-                assert(dstCount == 1);
-
-                if (!op1->isContained())
-                {
-                    tgtPrefUse = BuildUse(op1);
-                    srcCount   = 1;
-                }
-                else
-                {
-                    srcCount += BuildOperandUses(op1);
-                }
-
-                buildUses = false;
-                break;
-            }
-
-            case NI_AVX_SetAllVector256:
-            {
-                if (varTypeIsIntegral(baseType))
-                {
-                    buildInternalFloatRegisterDefForNode(intrinsicTree, allSIMDRegs());
-                    if (!compiler->compSupports(InstructionSet_AVX2) && varTypeIsByte(baseType))
-                    {
-                        buildInternalFloatRegisterDefForNode(intrinsicTree, allSIMDRegs());
-                    }
-                }
-                break;
-            }
-
             case NI_SSE2_MaskMove:
             {
                 assert(numArgs == 3);
@@ -2486,6 +2441,7 @@ int LinearScan::BuildHWIntrinsic(GenTreeHWIntrinsic* intrinsicTree)
 
 #ifdef _TARGET_X86_
             case NI_SSE42_Crc32:
+            case NI_SSE42_X64_Crc32:
             {
                 // TODO-XArch-Cleanup: Currently we use the BaseType to bring the type of the second argument
                 // to the code generator. We may want to encode the overload info in another way.
@@ -2824,6 +2780,10 @@ int LinearScan::BuildIndir(GenTreeIndir* indirTree)
         }
     }
 #ifdef FEATURE_SIMD
+    if (varTypeIsSIMD(indirTree))
+    {
+        SetContainsAVXFlags(true, genTypeSize(indirTree->TypeGet()));
+    }
     buildInternalRegisterUses();
 #endif // FEATURE_SIMD
 
