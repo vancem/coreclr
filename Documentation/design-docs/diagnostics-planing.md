@@ -81,7 +81,7 @@ Many of the items on the above list are cloud (Azure) itself (e.g. billing, geol
      
 ### Tooling support  
 
-While the hooks/infrastructure that the runtime provides is critical, there are other parts that
+While the hooks/infrastructure that the runtime provides are critical, there are other parts that
 are just as critical including
    
    * An agent/tool that controls the hooks, stores it (either locally or in the cloud), 
@@ -94,17 +94,17 @@ Moreover it is likely that there will be constraints on this system including
    * Tight constraints over impact to the running system (it is live, serving customers)
    * Restrictions on where the data can be stored and managed (e.g. for [GDPR](https://eugdpr.org/the-regulation/))
    * Accepting information from 'foreign' services to incorporate into the system.
-   * Working with existing monitoring systems. (They had an existing monitoring system)
+   * Working with existing monitoring systems. 
 
 In addition there are likely to be different environments 
 
    * A development environment where quick setup and ease of use are critical.
    * A production environment where very low overhead, and low impact are critical.  
-   * A test environment where excellent data detail is a high priority.  
+   * A test environment where excellent drill-into detail is a high priority.  
 
 This argues for a set of tools/tooling configurations that can all operate using the
 same runtime hooks.   The key point here is that the hooks and other .NET Core 
-support are of no value without the tools.   Moreover 
+support are of no value without the tools.   
 
 ## What Problems does .NET Core Runtime Monitoring need to Address
 
@@ -112,7 +112,7 @@ It is clear that the a diagnostics/monitoring system for services has to handle
 the basics: namely get information about 'interesting' events like errors (exceptions)
 as well as measure top level metrics (e.g. response time, throughput etc).   However
 in addition to these, there are are some requirements that are not so obvious that
-deserve special mention because they either affect many parts of the design, or are 
+deserve special mention because they either affect many parts of the design, or 
 simply will require a lot of work to solve.   We list them here.  
 
 ### Supporting Asynchronous Programming
@@ -149,11 +149,12 @@ and the runtime conspire to turn this code into efficient asynchronous code.
 While this support greatly eases the effort to write correct asynchronous code, it also creates 
 a rather HUGE diagnostics problem.  The code that the programmer writes BY DESIGN looks
 a lot like synchronous code, but under the hood, the C# compiler morphs the code in
-non-trivial ways mangling the method names to make state machines that serves as 
+non-trivial ways, mangling the method names to make state machines that serves as 
 continuations needed for the I/O callbacks.  There is no longer a 'call stack' or in 
-fact any 'blocking' by threads.  Instead methods return Tasks and you 'await' them. 
+fact any 'blocking' by threads.  Instead methods return Tasks and you 'await' them, which
+means scheduling a continuation state machine to run when the task completes.  
 
-The details take a while to really understand, but the key point here is that there is 
+The details are non-trivial, but the key point here is that there is 
 a very significant difference between how the programmer 'thinks' about
 the code (he thinks of it as being synchronous but efficient), and what is really 
 happening (state machines being created, linked together and threads reused without
@@ -161,17 +162,19 @@ blocking).    Since the diagnostics/monitoring/profiling system sees what is 're
 happening, it has to morph the data it gets back into something that matches the 
 model the programmer is expecting.  
 
-Moreover asynchronous code ends to be in the most performance-critical part of a service, 
+Moreover asynchronous code tends to be in the most performance-critical part of a service, 
 and users will want the ability to monitor in-production systems.   Thus there is
-a premium making it so that the asynchronous-to-synchronous view can be done with very
-low runtime overhead (which makes it hard).  
+a premium in making it so that the asynchronous-to-synchronous view transformation can 
+be done with very low runtime overhead (which makes it hard).  
 
-One of the very pleasant side effects of synchronous programming was the very simply
+#### Async and Request Correlation
+
+One of the very pleasant side effects of synchronous programming was the very simple
 correlation model.   A thread starts processing a request, and that thread is effectively
 'committed' to doing that request until the request completes.  Thus the threadID acts
-a a correlation ID.   Every operation that is associated with that thread is also related
-to the request (since the thread does nothing else).   However with asynchronous 
-programming a request is broken up into many small continuations, and the threads 
+a a correlation ID for the request itself.   That is, every operation that is associated with 
+that thread is also related to the request (since the thread does nothing else).   
+However with asynchronous programming a request is broken up into many small continuations, and the threads 
 run these continuations in an effectively random order.   Thus another way of 'marking'
 operations as belonging to a request must be created.  
 
@@ -183,7 +186,7 @@ As we have seen, asynchronous code makes correlating a request to a operations n
 to perform the request more challenging since a thread ID does not work as a correlation
 ID as well as it does in synchronous code.   However even purely synchronous code has
 the same correlation problem when it requires services on other machines.  When
-a request causes a database calls (or any other oof-machine service) again the thread ID
+a request causes a database call (or any other oof-machine service) again the thread ID
 can no longer serve as the correlation ID.   We need something to link the requestor and
 the service provider together.   
 
@@ -231,16 +234,48 @@ monitoring or diagnostics.
     * [AppInsights Profiler](https://docs.microsoft.com/en-us/azure/application-insights/app-insights-profiler) - A collector of highly detailed data for drilling into fine details of a performance problem.  
     * [Application Map](https://docs.microsoft.com/en-us/azure/application-insights/app-insights-app-map?toc=/azure/azure-monitor/toc.jso) A viewer that shows the high level causal flow of a multi-service application.  
 
+    * [Azure Service Diagnostics](https://blogs.msdn.microsoft.com/appserviceteam/2018/06/06/app-service-diagnostics-profiling-an-asp-net-web-app-on-azure-app-service/) Trace collecting in Azure. 
+
+* [Geneva Monitoring](https://genevamondocs.azurewebsites.net/)- This is an internal telemetry system for applications that Microsoft itself supports (e.g. Azure Storage, Office 365, Bing, Windows services ...)
+It supports Azure but also private systems like Autopilot. Quite a bit of Azure Monitor uses technology from Geneva.  This is how
+Azure knows how much CPU and Memory your VM instances are taking.   Azure's MA (Monitoring Agent) is a Geneva client 
+     * [Geneva Getting Started](https://genevamondocs.azurewebsites.net/getting%20started/intro.html)
+     * [Geneva Analytics](https://www.analytics.msftcloudes.com/v2/#/), is the 'back end' that allows you to make interesting queries.  
+
+
 * Time Travel Debugging (highly detailed logs that allow program replay (and reverse execution)
 
 * Intellitrace - TODO
 
+## Inventory of Competitors in for Application Performance Monitoring
+
+  * NuRelic
+  * AppDynamics
+  * Stackify Retrace
+  * Dynatrace 
+  * Riverbed SteelCentral
+  * Dell Foglight
+  * See https://www.imobdevtech.com/Blog/list-of-top-10-application-performance-monitoring-tools/ for more.  
+  * see https://stackify.com/application-performance-management-tools/ (from Stackify)
+  * see https://raygun.com/blog/performance-monitoring-tools/ (from raygun)
+
+Feedback on Application Insights as an APM tool
+
+* We included App Insights in our list, but it is arguably not a full-fledged APM solution. It does not do code level profiling but instead provides some high-level performance details only for SQL queries and web service calls. We would call it “APM light”.
+* Cons: No reporting per SQL query. No transaction tracing view. Does not correlate logs, errors, and request details well. No reporting across apps. Does not work for non web apps without major code changes. Can not track the performance of any line of code in your app via custom CLR profiling.
+
+### What do other Runtime environments do.  
+
+There is data 
+
 ## Elements of the Plan for Diagnostics/Monitoring. 
 
-* TODO this is not done, these are rough thoughts currently. 
+* TODO this is not done, these are rough thoughts currently.  
 
-### Refining Existing Features
+### Philosophy/Properties of the Solution
 
+* Integration with Azure is a feature, not a bug.   We wish the 'in Azure' experience to be
+  very good, and we are not that interested in other cloud platforms. 
 * Bottom Up, Modular Design
     * Ultimately we want a beautify nicely integrated, better-on-Azure scenario working well.   
       However as you build out that vision, you take dependencies on platforms, environments, 
@@ -273,8 +308,93 @@ monitoring or diagnostics.
       In writing these docs, we will see the deficiencies in the current features
       or incompleteness (does snot work on all platforms) and that can be used to drive 
       feature work. 
+* First insure that data is available within the process, then provide a mechanism for getting it 
+    out of proc (e.g. REST API of the EventPipe stream) and finally add a minimal amount of 
+    'command line' access, but mostly wire into our APM solutions (Azure Monitor / Application Insights))
 
-### New Features
+### Issues / Design Decisions (that effect the user experience)
+
+* How much do we want to do work to enable 'no modification' to the apps being monitored?   
+  It is additional work to provide a mechanism to serialize the data out of proc to some 
+  external monitor.   How much do we care?
+
+* What is the appropriate support in dev tools like Visual Studio for profiling/monitoring?
+  Currently this kind of monitoring is done through the Azure portal.    
+
+* Is having a single machine toy monitor (e.g. dotnet monitor) worthwhile?
+    * Having the ability to collect traces locally 'by hand' is useful and should be supported.
+    * Ability to locally display monitoring stats is not that useful.  It is most likely
+      a testing capability (when new instrumenation is added).  We should only invest minimally.  
+
+### End-to-End Scenario
+
+1. Startup problem (config / deployment / versioning ...).  Key is just to have information
+2. Intermittent problems (both functional and performance)
+3. Slow degrades to performance.  
+
+*******************************************************************************
+## .NET Core 3.0 Diagnostics Plan 
+
+Focusing in on V3.0 work for .NET Core specifically.   We have a top level experience in TFS for diagnostic work
+* [Close Desktop/.NET Core and windows/linux diagnosability gap](https://devdiv.visualstudio.com/DevDiv/_workitems/edit/648058)
+
+Noah Falk has done customer research to act as input to planning 3.0 which he called the 
+[.NET Core Framing Document](https://na01.safelinks.protection.outlook.com/?url=https%3A%2F%2Fmicrosoft.sharepoint.com%2F%3Aw%3A%2Ft%2FDNFPlanning%2FEYlvkars0C1EhhPlHXgTnnkB8dWyVesla7Gau10LW49A8A%3Fe%3DNRcH4O&data=02%7C01%7Cvancem%40microsoft.com%7C9ad662619d0d45250cb008d648e0c898%7C72f988bf86f141af91ab2d7cd011db47%7C1%7C0%7C636776527605907620&sdata=C7gW4FCNdb0BlwbRs1MWE0oxq0SUY6ZZh7ESWFPTlu8%3D&reserved=0).
+
+The main summary of this doc is 5 scenarios to improve
+  1. .NET Core documentation on Diagnostics is almost non-existent (especially compared to competitors).
+  2. Async programming is error-prone and difficult to diagnose.  
+  3. It is difficult/impossible to do a performance investigation if using Linux/Containers.
+  4. It is difficult/impossible to do a crash dump investigations, and in particular memory investigations. 
+  5. No 'easy on ramp' to monitor performance of a deployed app. 
+
+Based on this, a V3.0 plan was written up [.NET Core V3.0 Diagnostics Plan](https://microsoft.sharepoint.com/:w:/t/DNFPlanning/ES28ZR8LCmFEn4JjXQmMM_gBrrvnWOLOhH_rswCRviBYgw?rtime=3kgIi-5T1kg)
+that layed out the user stories.   
+
+This was then turned into User Stories / work items that will be tracked on Github here [Github .NET Core 3.0 Diagnostics Project](https://github.com/orgs/dotnet/projects/9).  
+
+A high level summary of the work being done is as follows
+
+ 1. Add a top level landing page for Diagnostics and Performance on the https://docs.microsoft.com.
+    Then flesh that out with details on how to do specific investigations, and in particular all the 
+    other work items listed here will be included in that documentation.  
+ 2. Add a new DumpASync command to the SOS debugging extension.   Work with Visual Studio Team to have it integrated into their parallel stacks view.  Make sure our existing Async dianostics works well.  
+ 3. Create a new 'dotnet-collect' global command that allows the collection of EventPipe data 'by hand'.  (See [dotnet-collect And dotnet-analyze](https://github.com/aspnet/AspLabs/tree/master/src/DotNetDiagnostics) for more.
+    It should be able to collect traces that can be read with either PerfView or Visual Studio.  
+ 4. Create a new 'dotnet-analyze' global command that allows you to do investigations on crash dumps.    Simple triage of crashes as well as memory investigations should be possible.  
+ 5. Insure that normal Azure and App-Insights default dashboard metrics work with .NET Core (on all platforms).   dotnet-collect will allow the ad-hoc collection of metrics for local monitoring.  
+
+ This work mostly fixes the gaps in 'ad-hoc' investigations (where a dev is working with a particular machine).  
+ In addition to this we want good integration with our other players in particular
+
+ 1. Azure allows ad hoc collection of traces from the portal.   This should work with Linux/Containers
+ 2. App-Insights profiler is using basically the same technology that is being leveraged for the ad-hoc case with dotnet-collect. 
+    They have solved the problem for the Azure App-Service case (and frankly most cases in Azure).   Make sure that this
+    works end-to-end (on all platforms and scenarios), and that there is good doc links from the ad-hoc case to using App-Insights.  
+ 3. App-Insights is working on a standard for that allows them to interoperate with other vendors.  This requires some runtime
+    changes to support, we will be adding this.    This is our 'real' monitoring solution and in particular our distributed
+    and micro-service monitoring story.  
+
+Note that the basic plan for V3.0 to frankly make sure that things we already have 
+(our existing monitoring story (e.g. App-Insights), our existing performance investigation 
+capabilities (e.g. Visual Studio, PerfView), work well ON ALL PLATFORMS and we have
+'fallbacks' (e.g. ad hoc ways of collecting data), when for whatever reason our main offerings
+did not work.   Along with this that these solutions are WELL DOCUMENTED and discoverable.
+It is not flashy work, but is the LACK of theses basics working well (and being discovered)
+which drive most of the feedback we have so far.   We need to get these under control.
+
+The most notable gap that we have cut but would rather have not, is to have this story work
+well when you don't have access to a Windows machine.   Currently our performance tools are 
+windows only and we have not fixed that.  Thus in the V3.0 plan above you need access to a
+windows machine.   We may be able to do something simple to mitigate this in the V3.0 timeframe
+(Flamegraphs are a traditional 'easy' way of avoiding building UI on Linux), but this is 
+currently not in plan (if we have time we will look into it)
+
+
+*******************************************************************************
+# Appendix/Raw Ideas.  
+
+## New Features
 
 * Decouple Diagnostic information from its presentation.  
     * We need tools that work in a highly integrated environment (which probably have
@@ -284,8 +404,178 @@ monitoring or diagnostics.
       'minimal' tooling make a UI over that REST API (probably in JavaScript (just like VSCode))
       These minimal tools will be open sourced and community driven, but along side them
       we can have full featured/integrated tools (e.g. AppInsights)
-    * Use JavaScript/HTML Electron for cross platform UI for these presentation tools. 
+    * Use JavaScript/HTML Electron for cross platform UI for these presentation tools.  (Alternatively maybe Blazor (Web Assembly))
+
 * Standard compliance can be done with a doc driven approach.
     * If we pick a demo with a 3rd party that is committed to implementing their side
       of the correlation standards, we can write up the demo that drives the features
       needed to make that end-to-end scenario work.  
+
+* 'dotnet profile' - local machine ETW tracing.   Definitely useful.
+
+* 'dotnet monitor' - logs monitoring information.   Ideally creates a format that other tools will just us
+      thus it is really more of a format converter than anything else.   Not a lot of work, but also useful
+      for people 
+
+* Currently Azure Monitor Metrics does track some performance counters 
+
+* If we care about supporting existing Application Performance Monitoring solutions, the issue of how to have 
+  multiple .NET Profilers connected to the same .NET Core runtime needs to be addressed.   
+
+## WORK-IN-PROGRESS
+
+Elements of plan
+* Well Instrumented Runtime
+* Good Documentation on diagnostics / monitoring / profiling at https://docs.microsoft.com
+* Good support for Async (with Docs)
+* Good support for Multi-Machine and/or MicroServices
+* Works on all platforms / Architectures
+* Monitoring costs very little, but you have the data you need
+    * This requires sampling of REQUESTS (causality flow) Event across tiers, Azure Functions, Service Fabric. Containers
+
+Plan
+1. EventPipe (No ETW) Works on Linux, Can do counters, all inst
+2. EventCounter instrumentation in the Framework. 
+3. Named Pipe / HTTP REST API for accessing EventPipe information for monitoring.   
+4. Good Causality Instrumentation (so that Async -> Sync transformation works well)
+
+
+[Geneva and One DS](https://microsoft.sharepoint.com/teams/MSWHub/_layouts/15/search.aspx?k=One%20DS&q=OneDS&t=y&v=search)
+
+[OneDS Integration Presentation](https://microsoft.sharepoint.com/teams/osg_unistore/sce/Shared%20Documents/Forms/AllItems.aspx?id=%2Fteams%2Fosg_unistore%2Fsce%2FShared%20Documents%2FTechnical%20Reference%20Documents%2F1DSIntegrationApproaches.pptx&parent=%2Fteams%2Fosg_unistore%2Fsce%2FShared%20Documents%2FTechnical%20Reference%20Documents&embed=%7B%22o%22%3A%22https%3A%2F%2Fmicrosoft.sharepoint.com%22%2C%22id%22%3A%22d9ec5f58-a52f-483e-946a-2913b83935bc%22%2C%22af%22%3Atrue%7D)
+
+[Geneva Logging Presentation](https://microsoft.sharepoint.com/teams/mswhub/_layouts/15/search.aspx?q=OneDS&t=y&v=search&k=OneDS#Default=%7B%22k%22%3A%22OneDS%22%2C%22r%22%3A%5B%7B%22n%22%3A%22LastModifiedTime%22%2C%22t%22%3A%5B%22range(2017-11-26T22%3A42%3A43.849Z%2C%20max%2C%20to%3D%5C%22le%5C%22)%22%5D%2C%22o%22%3A%22and%22%2C%22k%22%3Afalse%2C%22m%22%3Anull%7D%5D%2C%22l%22%3A1033%7D)
+
+[Service Logging Library (SLL)](https://microsoft.sharepoint.com/teams/mswhub/_layouts/15/search.aspx?q=SLL%20Logging&t=y&v=search&k=SLL%20Logging#Default=%7B%22k%22%3A%22SLL%20Logging%22%2C%22r%22%3A%5B%7B%22n%22%3A%22LastModifiedTime%22%2C%22t%22%3A%5B%22range(2017-11-26T22%3A44%3A19.557Z%2C%20max%2C%20to%3D%5C%22le%5C%22)%22%5D%2C%22o%22%3A%22and%22%2C%22k%22%3Afalse%2C%22m%22%3Anull%7D%5D%2C%22l%22%3A1033%7D)
+
+[Syslog.net](https://github.com/emertechie/SyslogNet)
+[RFC 5424 Syslogd transport](https://datatracker.ietf.org/doc/rfc5424/?include_text=1)
+
+[One DS Docs](https://1dsdocs.azurewebsites.net/getting-started/csharp-getting_started.html)
+
+[One Data Strategy 1DS](https://microsoft.sharepoint.com/teams/WAG/EngSys/Shared%20Documents/Forms/AllItems.aspx?id=%2Fteams%2FWAG%2FEngSys%2FShared%20Documents%2FTelemetry%20Collaboration%2F1DS%2F1DS%20Vision%20and%20Strategy%20(2018).docx&parent=%2Fteams%2FWAG%2FEngSys%2FShared%20Documents%2FTelemetry%20Collaboration%2F1DS&embed=%7B%22o%22%3A%22https%3A%2F%2Fmicrosoft.sharepoint.com%22%2C%22id%22%3A%222079771a-df5c-4f23-8f38-f91963fda137%22%2C%22af%22%3Atrue%7D)
+
+https://aria.microsoft.com/  https://www.aria.ms/?ref=vc_banner
+
+https://aria.microsoft.com/developer/downloads/downloads/telemetry-sdks
+
+
+
+Things I think we can improve
+* Making it easy to instrument 
+* Sampling of requests 
+* Harmonize System.Activity and EventSource concept of Activity.
+* Guidance on how to do instrumentation.
+
+
+Version 3.0 work
+
+1. Documentation
+2. I can see Existing Live Metrics on Azure Portal (Uniformly, Linux, Windows)
+        Http 5XX, DataIn, DataOut, #Requests, ResponseTime. 
+        Ave Working set, CPU, Private Bytes
+        Connections, Request in App Queue, Current Assemblies, Gen 0, 1, 2, Handle Count, Http Errors (various)
+        Windows I/O Read, Write, Other, Thread Count, # AppDomain
+3. Other Metrics?  (Exceptions) Some Metric that shows Async failure?
+4. See Metrics Via Console / Local ?
+5. Capture CPU Trace Locally.   (Linux)
+6. View Trace in Visual Studio   View Traces locally (Linux)
+7. Take a Heap Snapshot locally.  
+8. Extract a Heap Snapshot from a Crash Dump.
+9. Diagnose Async starvation from Crash dump.  (VS)
+
+
+Work
+1. Activity ID support for Application Insights
+2. Creating a 'REST-LIKE' interface for EventPipe
+3. Making EventPipe Multi-session
+4. Test/Validate/Fix Causality View for Async
+
+
+*******************
+
+Has some work committed or in progress.  
+  Experience 648209: .NET Core scenarios should support diagnostics as a perpendicular feature
+
+In particular this one
+
+  [.NET Core 3.0 has great Fundamentals (Acquisition, Compliance, Security, Performance, Reliability, Globalization etc.)](https://devdiv.visualstudio.com/DevDiv/_workitems/edit/633055)
+
+[EventPipe Work](https://github.com/dotnet/coreclr/issues?q=is%3Aopen+is%3Aissue+project%3Adotnet%2Fcoreclr%2F5)
+
+*******************
+
+Work items in https://github.com/dotnet/diagnostics/issues 
+
+
+Migrate DotNetDiagnostics from to AspLabs to this repo
+#92 opened 5 days ago by shirhatti 
+ 1
+User Story: Stream logs to a console UI in the local machine scenario
+#91 opened 5 days ago by shirhatti 
+ 1
+User Story: Enable diagnosing common Async problems
+#90 opened 5 days ago by tommcdon 0 of 2
+  v3.0
+ 3
+User Story: Heap investigation from a crash dump on a different machine Priority 2
+#89 opened 5 days ago by tommcdon  v3.0
+User Story: Enable local crash dump analysis with a standalone tool
+#88 opened 5 days ago by tommcdon 0 of 2
+  v3.0
+ 1
+User Story: Enable ad-hoc memory leak investigation in VS
+#87 opened 5 days ago by tommcdon 
+ 1
+User Story: Enable ad-hoc perf trace collection in VS
+#86 opened 5 days ago by tommcdon  v3.0
+ 1
+User Story: Expose .NET Perf Counters in the local machine scenario
+#85 opened 5 days ago by tommcdon  v3.0
+ 2
+User Story: Expose .NET Core Perf Counters for App Insights Live Metrics page
+#84 opened 5 days ago by tommcdon 
+Provide managed APIs for our canonical set of runtime performance counters
+#83 opened 5 days ago by tommcdon 
+ 2
+Add docs for .Net Core diagnostic scenarios 
+#81 opened 5 days ago by tommcdon
+
+**************************************************
+[All .NET Core Diagnostics](https://github.com/dotnet/diagnostics/issues)
+
+
+Damian Edwards, Tom McDonald, Sourabh Shirhatti
+******************
+
+[DumpAsync work item](https://github.com/dotnet/diagnostics/issues/90)
+
+DumpAsync 
+
+!DumpAsync [-addr <Object Address>]
+           [-mt <MethodTable address>]
+           [-type <partial type name>]
+           [-tasks]
+           [-completed]
+           [-fields]
+           [-stacks]
+           [-roots]
+
+!DumpAsync traverses the garbage collected heap, looking for objects representing
+async state machines as created when an async method's state is transferred to the
+heap.  This command recognizes async state machines defined as "async void", "async Task",
+"async Task<T>", "async ValueTask", and "async ValueTask<T>".  It also optionally supports
+any other tasks.
+
+"Usage: DumpAsync [-addr ObjectAddr] [-mt MethodTableAddr] [-type TypeName] [-tasks] [-completed] [-fields] [-stacks] [-roots]\n"
+  "[-addr ObjectAddr]    => Only display the async object at the specified address.\n"
+  "[-mt MethodTableAddr] => Only display top-level async objects with the specified method table address.\n"
+  "[-type TypeName]      => Only display top-level async objects whose type name includes the specified substring.\n"
+  "[-tasks]              => Include Task and Task-derived objects, in addition to any state machine objects found.\n"
+  "[-completed]          => Include async objects that represent completed operations but that are still on the heap.\n"
+  "[-fields]             => Show the fields of state machines.\n"
+  "[-stacks]             => Gather, output, and consolidate based on continuation chains / async stacks for discovered async objects.\n"
+  "[-roots]              => Perform a gcroot on each rendered async object.\n"
+
+
+
