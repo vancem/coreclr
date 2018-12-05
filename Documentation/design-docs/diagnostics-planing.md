@@ -1,6 +1,7 @@
 # .NET Core Diagnostics Vision 
 
-This document describes a high level vision/plan for diagnostics / monitoring for the .NET Core runtime. 
+[This document](https://github.com/vancem/coreclr/blob/diagPlan/Documentation/design-docs/diagnostics-planing.md)
+describes a high level vision/plan for diagnostics / monitoring for the .NET Core runtime. 
 The overarching goal is easy to state.
 
 * .NET Core should be the most diagnosable, easiest to manage service/app framework platform bar none
