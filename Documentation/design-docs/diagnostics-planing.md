@@ -206,8 +206,8 @@ among these 3rd parties.    It is also useful for other information to flow with
 request (e.g. whether this particular request should have detailed logging turned on 
 while it is being processed).   Supporting good logging with 3rd parties requires 
 some standards of each party.   
-There are already w3c draft standards for the [correlation ID](https://w3c.github.io/distributed-tracing/report-trace-context.html)
-and [set of key-value pairs that flow with the request](https://w3c.github.io/distributed-tracing/report-correlation-context.html) 
+There are already w3c draft standards for the [Trace Context](https://w3c.github.io/trace-context/) ([github](https://github.com/w3c/trace-context))
+and [Trace Context Headers](https://w3c.github.io/correlation-context/) ([github](https://github.com/w3c/correlation-context))
 that allow for this kind of 3rd party interoperation.  We should be supporting this.  
 
 ## Inventory of Existing .NET Core Monitoring / Diagnostics Infrastructure 
@@ -579,4 +579,7 @@ any other tasks.
   "[-roots]              => Perform a gcroot on each rendered async object.\n"
 
 
+[Stephen's Async working group slides](https://microsoft-my.sharepoint.com/:p:/p/stoub/EfbGD3TCYlFMkR1jG6XlXFkBx9UJ_Wr1y458IZUJ_fJ9Zg?e=Q8CXrg)
+
+[Notes from the 10/23/18 working group meeting](https://microsoft-my.sharepoint.com/personal/stoub_microsoft_com/_layouts/15/WopiFrame.aspx?sourcedoc={934d02da-ac53-4dc3-8a64-33921d886c04}&action=edit&wd=target%28Untitled%20Section.one%7C709eb0e8-9290-4071-98a7-23c752b25f99%2FOct%205%2C%202018%7C6341db20-85e9-4468-8446-b13fe50da646%2F%29&wdorigin=703)
 
